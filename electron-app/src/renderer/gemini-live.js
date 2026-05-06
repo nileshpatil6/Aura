@@ -97,7 +97,7 @@ class GeminiLive {
       const b64 = this.float32ToInt16Base64(data);
       this.ws.send(JSON.stringify({
         realtime_input: {
-          audio: { mime_type: 'audio/pcm;rate=16000', data: b64 },
+          media_chunks: [{ mime_type: 'audio/pcm;rate=16000', data: b64 }],
         },
       }));
     };
@@ -126,7 +126,7 @@ class GeminiLive {
         setup: {
           model: MODEL,
           generation_config: {
-            response_modalities: ['AUDIO'],
+            response_modalities: ['AUDIO', 'TEXT'],
             speech_config: {
               voice_config: {
                 prebuilt_voice_config: { voice_name: 'Aoede' },
@@ -152,6 +152,11 @@ class GeminiLive {
 
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+
+      if (msg.error) {
+        this.callbacks.onError(`Gemini error: ${msg.error.message || JSON.stringify(msg.error)}`);
+        return;
+      }
 
       if (msg.setupComplete) {
         this.connected = true;
@@ -203,7 +208,10 @@ class GeminiLive {
   }
 
   sendText(text) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.callbacks.onError('Not connected to Gemini. Please reopen the assistant.');
+      return;
+    }
     this.callbacks.onUserText(text);
     this.callbacks.onStateChange('thinking');
     this.ws.send(JSON.stringify({
