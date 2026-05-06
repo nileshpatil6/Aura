@@ -136,15 +136,6 @@ ipcMain.on('resize-collapsed', () => {
   collapseWindow();
 });
 
-ipcMain.on('wake-word-detected', () => {
-  if (!isVisible) {
-    expandWindow();
-    mainWindow.focus();
-    mainWindow.webContents.send('activate');
-    isVisible = true;
-  }
-});
-
 ipcMain.handle('take-screenshot', async () => {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],

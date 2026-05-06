@@ -201,53 +201,6 @@ if (window.electronAPI) {
   window.electronAPI.onDeactivate(() => { if (isOpen) closeAssistant(); });
 }
 
-// ──── Wake word detection ─────────────────────────────────────────────────────
-(function startWakeWordDetection() {
-  const WAKE_WORDS = ['hey gemini', 'ok gemini', 'okay gemini', 'hi gemini'];
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return;
-
-  let paused = false;
-
-  function loop() {
-    if (paused || isOpen) {
-      setTimeout(loop, 1000);
-      return;
-    }
-
-    const r = new SR();
-    r.continuous = false;
-    r.interimResults = false;
-    r.maxAlternatives = 3;
-    r.lang = 'en-US';
-
-    r.onresult = (e) => {
-      for (let i = 0; i < e.results.length; i++) {
-        for (let j = 0; j < e.results[i].length; j++) {
-          const t = e.results[i][j].transcript.toLowerCase();
-          console.log('heard:', t);
-          if (WAKE_WORDS.some(w => t.includes(w))) {
-            window.electronAPI?.triggerWakeWord();
-            return;
-          }
-        }
-      }
-    };
-
-    // restart immediately after each utterance/silence
-    r.onend = () => setTimeout(loop, 300);
-    r.onerror = (e) => {
-      // 'not-allowed' = no mic permission, stop trying
-      if (e.error === 'not-allowed') { paused = true; return; }
-      setTimeout(loop, 1000);
-    };
-
-    try { r.start(); } catch { setTimeout(loop, 1000); }
-  }
-
-  // wait a bit so the page settles before grabbing mic
-  setTimeout(loop, 2000);
-}());
 
 // ──── Init ────────────────────────────────────────────────────────────────────
 setState('idle');

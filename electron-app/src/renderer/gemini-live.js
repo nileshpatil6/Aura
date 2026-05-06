@@ -238,31 +238,26 @@ class GeminiLive {
   async _handleScreenCapture(callId) {
     try {
       const b64 = await window.electronAPI.takeScreenshot();
-      if (!b64) {
-        this.ws.send(JSON.stringify({
-          toolResponse: {
-            functionResponses: [{
-              id: callId,
-              name: 'capture_screen',
-              response: { error: 'No screen source found.' },
-            }],
-          },
-        }));
-        return;
-      }
+
+      // toolResponse must be plain JSON - no inlineData allowed here
       this.ws.send(JSON.stringify({
         toolResponse: {
           functionResponses: [{
             id: callId,
             name: 'capture_screen',
-            response: {
-              output: {
-                inlineData: { mimeType: 'image/jpeg', data: b64 },
-              },
-            },
+            response: { output: b64 ? 'screenshot_ready' : 'no_screen_found' },
           }],
         },
       }));
+
+      if (b64) {
+        // Send the actual image as a video frame so the model can see it
+        this.ws.send(JSON.stringify({
+          realtimeInput: {
+            video: { mimeType: 'image/jpeg', data: b64 },
+          },
+        }));
+      }
     } catch (err) {
       console.error('Screenshot error:', err);
       this.callbacks.onError('Failed to capture screen.');
