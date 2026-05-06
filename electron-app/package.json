@@ -30,7 +30,8 @@
     "files": [
       "src/**/*",
       "assets/**/*"
-    ]
+    ],
+    "publish": null
   },
   "dependencies": {
     "electron-store": "^8.1.0"
