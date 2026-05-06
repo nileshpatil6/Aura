@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Gemini AI Assistant"
+version = "1.0.0"
+id = "artifacts/gemini-assistant"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 26184
+
+[services.development]
+run = "pnpm --filter @workspace/gemini-assistant run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/gemini-assistant", "run", "build" ]
+publicDir = "artifacts/gemini-assistant/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "26184"
+BASE_PATH = "/"
