@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage } = require('electron');
+const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
 
 let mainWindow = null;
@@ -134,4 +134,22 @@ ipcMain.on('resize-expanded', () => {
 
 ipcMain.on('resize-collapsed', () => {
   collapseWindow();
+});
+
+ipcMain.on('wake-word-detected', () => {
+  if (!isVisible) {
+    expandWindow();
+    mainWindow.focus();
+    mainWindow.webContents.send('activate');
+    isVisible = true;
+  }
+});
+
+ipcMain.handle('take-screenshot', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 1280, height: 720 },
+  });
+  if (!sources.length) return null;
+  return sources[0].thumbnail.toJPEG(80).toString('base64');
 });

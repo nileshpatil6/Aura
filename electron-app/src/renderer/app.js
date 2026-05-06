@@ -201,5 +201,75 @@ if (window.electronAPI) {
   window.electronAPI.onDeactivate(() => { if (isOpen) closeAssistant(); });
 }
 
+// ──── Wake word detection (energy VAD gate + SpeechRecognition) ───────────────
+(function startWakeWordDetection() {
+  const WAKE_WORDS = ['hey gemini', 'ok gemini', 'okay gemini', 'hi gemini'];
+  const ENERGY_THRESHOLD = 10;   // RMS threshold to gate recognition
+  const CHECK_INTERVAL_MS = 150; // how often to sample energy
+
+  if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) return;
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognizing = false;
+  let recognition = null;
+  let analyser = null;
+  let energyData = null;
+
+  function getEnergy() {
+    if (!analyser) return 0;
+    analyser.getByteTimeDomainData(energyData);
+    let sum = 0;
+    for (let i = 0; i < energyData.length; i++) {
+      const v = (energyData[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / energyData.length) * 100;
+  }
+
+  function startRecognition() {
+    if (recognizing || isOpen) return;
+    recognizing = true;
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript.toLowerCase().trim();
+      console.log('Wake word check:', transcript);
+      for (const w of WAKE_WORDS) {
+        if (transcript.includes(w)) {
+          window.electronAPI?.triggerWakeWord();
+          break;
+        }
+      }
+    };
+
+    recognition.onend = () => { recognizing = false; };
+    recognition.onerror = () => { recognizing = false; };
+
+    try { recognition.start(); } catch { recognizing = false; }
+  }
+
+  // Set up mic analyser for energy gating (very cheap, no cloud calls)
+  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    .then((stream) => {
+      const actx = new AudioContext();
+      analyser = actx.createAnalyser();
+      analyser.fftSize = 256;
+      energyData = new Uint8Array(analyser.fftSize);
+      actx.createMediaStreamSource(stream).connect(analyser);
+
+      setInterval(() => {
+        if (isOpen) return;
+        if (getEnergy() > ENERGY_THRESHOLD) startRecognition();
+      }, CHECK_INTERVAL_MS);
+    })
+    .catch(() => {
+      // No mic permission yet - that's fine, wake word just won't work until granted
+    });
+}());
+
 // ──── Init ────────────────────────────────────────────────────────────────────
 setState('idle');

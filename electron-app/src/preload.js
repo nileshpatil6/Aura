@@ -6,4 +6,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   collapse: () => ipcRenderer.send('collapse'),
   resizeExpanded: () => ipcRenderer.send('resize-expanded'),
   resizeCollapsed: () => ipcRenderer.send('resize-collapsed'),
+  takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
+  triggerWakeWord: () => ipcRenderer.send('wake-word-detected'),
 });

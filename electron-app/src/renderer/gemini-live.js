@@ -113,7 +113,6 @@ class GeminiLive {
 
     ws.onopen = () => {
       console.log('WS open, sending setup...');
-      // camelCase keys required by the API
       ws.send(JSON.stringify({
         setup: {
           model: MODEL,
@@ -127,9 +126,16 @@ class GeminiLive {
           },
           systemInstruction: {
             parts: [{
-              text: 'You are a helpful AI assistant like Siri. Be concise, conversational, and friendly. Keep responses short unless the user asks for detail.',
+              text: 'You are a helpful AI assistant like Siri running as a Windows desktop overlay. Be concise, conversational, and friendly. Keep responses short unless asked for detail. You have a tool called capture_screen — use it whenever the user asks you to look at, analyse, help with, or see what is on their screen.',
             }],
           },
+          tools: [{
+            functionDeclarations: [{
+              name: 'capture_screen',
+              description: 'Captures a screenshot of the user\'s current screen so you can see and analyse what they are looking at.',
+              parameters: { type: 'OBJECT', properties: {} },
+            }],
+          }],
         },
       }));
     };
@@ -186,6 +192,16 @@ class GeminiLive {
           }
         }
       }
+
+      if (msg.toolCall) {
+        this.callbacks.onStateChange('thinking');
+        const calls = msg.toolCall.functionCalls || [];
+        for (const call of calls) {
+          if (call.name === 'capture_screen') {
+            await this._handleScreenCapture(call.id);
+          }
+        }
+      }
     };
 
     ws.onerror = (e) => {
@@ -217,6 +233,40 @@ class GeminiLive {
         turnComplete: true,
       },
     }));
+  }
+
+  async _handleScreenCapture(callId) {
+    try {
+      const b64 = await window.electronAPI.takeScreenshot();
+      if (!b64) {
+        this.ws.send(JSON.stringify({
+          toolResponse: {
+            functionResponses: [{
+              id: callId,
+              name: 'capture_screen',
+              response: { error: 'No screen source found.' },
+            }],
+          },
+        }));
+        return;
+      }
+      this.ws.send(JSON.stringify({
+        toolResponse: {
+          functionResponses: [{
+            id: callId,
+            name: 'capture_screen',
+            response: {
+              output: {
+                inlineData: { mimeType: 'image/jpeg', data: b64 },
+              },
+            },
+          }],
+        },
+      }));
+    } catch (err) {
+      console.error('Screenshot error:', err);
+      this.callbacks.onError('Failed to capture screen.');
+    }
   }
 
   disconnect() {
