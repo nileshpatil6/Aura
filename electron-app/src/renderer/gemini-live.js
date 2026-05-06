@@ -1,6 +1,3 @@
-// Gemini Live API WebSocket handler
-// Model: gemini-2.0-flash-live-001
-
 const GEMINI_API_KEY = 'REMOVED_API_KEY';
 const WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
 const MODEL = 'models/gemini-3.1-flash-live-preview';
@@ -9,7 +6,7 @@ const OUTPUT_SAMPLE_RATE = 24000;
 
 class GeminiLive {
   constructor(callbacks) {
-    this.callbacks = callbacks; // { onStateChange, onTranscript, onUserText, onError }
+    this.callbacks = callbacks;
     this.ws = null;
     this.audioCtx = null;
     this.sourceNode = null;
@@ -20,8 +17,6 @@ class GeminiLive {
     this.nextPlayTime = 0;
     this.connected = false;
   }
-
-  // ──── helpers ────────────────────────────────────────────────────────────────
 
   float32ToInt16Base64(float32) {
     const int16 = new Int16Array(float32.length);
@@ -44,8 +39,6 @@ class GeminiLive {
     for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 32768.0;
     return f32;
   }
-
-  // ──── audio playback ─────────────────────────────────────────────────────────
 
   enqueueAudio(b64) {
     const samples = this.base64ToFloat32(b64);
@@ -76,8 +69,6 @@ class GeminiLive {
     src.onended = () => this._playNext();
   }
 
-  // ──── microphone recording ────────────────────────────────────────────────────
-
   async startRecording() {
     if (!this.audioCtx) {
       this.audioCtx = new AudioContext({ sampleRate: INPUT_SAMPLE_RATE });
@@ -95,9 +86,10 @@ class GeminiLive {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       const data = e.inputBuffer.getChannelData(0);
       const b64 = this.float32ToInt16Base64(data);
+      // camelCase keys required by the API
       this.ws.send(JSON.stringify({
-        realtime_input: {
-          media_chunks: [{ mime_type: 'audio/pcm;rate=16000', data: b64 }],
+        realtimeInput: {
+          mediaChunks: [{ mimeType: 'audio/pcm;rate=16000', data: b64 }],
         },
       }));
     };
@@ -112,8 +104,6 @@ class GeminiLive {
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
   }
 
-  // ──── WebSocket connection ────────────────────────────────────────────────────
-
   async connect() {
     if (this.connected) return;
     this.callbacks.onStateChange('listening');
@@ -122,20 +112,22 @@ class GeminiLive {
     this.ws = ws;
 
     ws.onopen = () => {
+      console.log('WS open, sending setup...');
+      // camelCase keys required by the API
       ws.send(JSON.stringify({
         setup: {
           model: MODEL,
-          generation_config: {
-            response_modalities: ['AUDIO', 'TEXT'],
-            speech_config: {
-              voice_config: {
-                prebuilt_voice_config: { voice_name: 'Aoede' },
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: 'Aoede' },
               },
             },
           },
-          system_instruction: {
+          systemInstruction: {
             parts: [{
-              text: 'You are a helpful AI assistant like Siri. Be concise, conversational, and friendly. Keep responses short unless the user asks for detail. You are running as a native Windows desktop overlay.',
+              text: 'You are a helpful AI assistant like Siri. Be concise, conversational, and friendly. Keep responses short unless the user asks for detail.',
             }],
           },
         },
@@ -153,12 +145,15 @@ class GeminiLive {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
 
+      console.log('WS msg keys:', Object.keys(msg));
+
       if (msg.error) {
         this.callbacks.onError(`Gemini error: ${msg.error.message || JSON.stringify(msg.error)}`);
         return;
       }
 
       if (msg.setupComplete) {
+        console.log('Setup complete, starting mic...');
         this.connected = true;
         this.callbacks.onStateChange('listening');
         await this.startRecording();
@@ -191,19 +186,20 @@ class GeminiLive {
           }
         }
       }
+    };
 
-      if (msg.toolCall) {
-        this.callbacks.onStateChange('thinking');
+    ws.onerror = (e) => {
+      console.error('WS error:', e);
+      this.callbacks.onError('Connection error. Check API key and internet.');
+      this.connected = false;
+    };
+
+    ws.onclose = (event) => {
+      console.warn('WS closed:', event.code, event.reason);
+      this.connected = false;
+      if (event.code !== 1000 && event.code !== 1001) {
+        this.callbacks.onError(`Disconnected (${event.code}): ${event.reason || 'Check API key or network.'}`);
       }
-    };
-
-    ws.onerror = () => {
-      this.callbacks.onError('Connection error. Check your API key and internet connection.');
-      this.connected = false;
-    };
-
-    ws.onclose = () => {
-      this.connected = false;
     };
   }
 
@@ -214,10 +210,11 @@ class GeminiLive {
     }
     this.callbacks.onUserText(text);
     this.callbacks.onStateChange('thinking');
+    // camelCase keys required by the API
     this.ws.send(JSON.stringify({
-      client_content: {
+      clientContent: {
         turns: [{ role: 'user', parts: [{ text }] }],
-        turn_complete: true,
+        turnComplete: true,
       },
     }));
   }
@@ -230,8 +227,6 @@ class GeminiLive {
     this.nextPlayTime = 0;
     this.connected = false;
   }
-
-  // ──── microphone visualizer data ──────────────────────────────────────────────
 
   startVisualizer(callback) {
     if (!this.stream) return null;
