@@ -2,49 +2,63 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' wss: https: data: blob:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' wss: https: data: blob: fonts.googleapis.com fonts.gstatic.com;" />
   <title>Gemini Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="app">
-    <!-- Collapsed pill (always visible) -->
+    <!-- ── Pill (always visible) ── -->
     <div id="pill" class="pill">
-      <div id="orb" class="orb idle">
-        <svg class="orb-icon" viewBox="0 0 24 24" fill="white">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/>
-        </svg>
+      <div class="orb-wrap idle" id="orb-wrap">
+        <div class="orb-ring"></div>
+        <div class="orb-gradient"></div>
+        <div class="orb-inner">
+          <svg class="orb-icon" id="orb-icon" viewBox="0 0 24 24">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/>
+          </svg>
+        </div>
       </div>
+
       <span id="pill-label" class="pill-label">Ctrl+Space</span>
       <button id="close-btn" class="close-btn hidden" title="Close">✕</button>
     </div>
 
-    <!-- Expanded panel -->
+    <!-- ── Expanded panel ── -->
     <div id="panel" class="panel hidden">
       <div class="panel-header">
         <span class="panel-title">Gemini Assistant</span>
         <span id="status-text" class="status-text">Listening...</span>
       </div>
 
+      <!-- Mic waveform -->
       <div id="visualizer" class="visualizer hidden">
         <div class="bars" id="bars"></div>
       </div>
 
+      <!-- Thinking dots -->
       <div id="thinking-anim" class="thinking-anim hidden">
         <div class="dot"></div>
         <div class="dot"></div>
         <div class="dot"></div>
       </div>
 
+      <!-- Speaking wave -->
       <div id="speaking-anim" class="speaking-anim hidden">
         <div class="wave-bars" id="wave-bars"></div>
       </div>
 
+      <!-- AI response text -->
       <div id="transcript" class="transcript hidden"></div>
+
+      <!-- User sent text -->
       <div id="user-text" class="user-text hidden"></div>
 
+      <!-- Text input -->
       <div id="text-input-row" class="text-input-row hidden">
-        <input id="text-input" class="text-input" placeholder="Type a message..." autocomplete="off" />
+        <input id="text-input" class="text-input" placeholder="Type a message…" autocomplete="off" spellcheck="false" />
         <button id="send-btn" class="send-btn">
           <svg viewBox="0 0 24 24" fill="white" width="16" height="16">
             <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -52,10 +66,12 @@
         </button>
       </div>
 
+      <!-- Error -->
       <div id="error-box" class="error-box hidden"></div>
 
+      <!-- Footer -->
       <div class="panel-footer">
-        <button id="keyboard-btn" class="footer-btn" title="Type instead">⌨ Type</button>
+        <button id="keyboard-btn" class="footer-btn">⌨  Type instead</button>
       </div>
     </div>
   </div>
