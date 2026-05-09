@@ -13,13 +13,15 @@ CAPABILITIES:
 - show_notification: Show a Windows toast notification
 - get_system_info: Get time/date, battery, memory, disk, running processes, IP, clipboard
 - capture_screen: See what's on the user's screen
+- computer_action: Click, type, scroll, or press keys on screen. After each action you automatically get a fresh screenshot so you can decide the next step.
 
-BEHAVIOR:
-- Be concise and action-first. When asked to do something, call the tool immediately, then confirm briefly.
-- For open_application, pass the plain app name (e.g. "whatsapp", "spotify", "chrome").
-- For run_command, write clean PowerShell. The output comes back to you — use it to respond accurately.
-- If a task needs multiple steps, chain tool calls.
-- Never say you can't do something without trying run_command first.
+AUTONOMOUS MULTI-STEP BEHAVIOR:
+- When given a multi-step task (e.g. "open chrome and search cats"), execute each step as a computer_action, then analyze the screenshot that comes back, and keep acting until the task is complete — no user input needed between steps.
+- After computer_action you receive the updated screen. Use it to verify progress and decide what to do next.
+- Coordinates are in the 1280x720 screenshot space.
+- For clicking UI elements, use capture_screen first to see the screen, then computer_action to click the target.
+- For typing: click the input field first (computer_action click), then type (computer_action type).
+- Stop acting when the goal is achieved or after 10 steps.
 - Keep spoken responses short — one or two sentences max.`;
 
 const TOOLS = [{
@@ -103,6 +105,26 @@ const TOOLS = [{
           },
         },
         required: ['type'],
+      },
+    },
+    {
+      name: 'computer_action',
+      description: 'Performs a mouse or keyboard action on screen. After execution, you automatically receive a screenshot of the result so you can continue multi-step tasks without user input. Coordinates are in 1280x720 space.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          action: {
+            type: 'STRING',
+            description: 'One of: click, right_click, double_click, move, scroll_down, scroll_up, type, key',
+          },
+          x: { type: 'NUMBER', description: 'X coordinate (0-1280) for mouse actions' },
+          y: { type: 'NUMBER', description: 'Y coordinate (0-720) for mouse actions' },
+          text: { type: 'STRING', description: 'Text to type (for action=type)' },
+          key: { type: 'STRING', description: 'Key name to press (for action=key). Examples: enter, tab, escape, ctrl+c, ctrl+v, ctrl+a, ctrl+z, f5' },
+          direction: { type: 'STRING', description: 'Scroll direction: up or down (for scroll actions)' },
+          clicks: { type: 'NUMBER', description: 'Number of scroll clicks (default 3)' },
+        },
+        required: ['action'],
       },
     },
   ],
@@ -327,6 +349,13 @@ class GeminiLive {
         result = await window.electronAPI.showNotification(args.title, args.message);
       } else if (name === 'get_system_info') {
         result = await window.electronAPI.getSystemInfo(args.type);
+      } else if (name === 'computer_action') {
+        this.callbacks.onTranscript(`Action: ${args.action}${args.text ? ` "${args.text}"` : ''}…`);
+        result = await window.electronAPI.computerAction(args);
+        // autonomous loop: send result then auto-screenshot so Gemini sees updated screen
+        this._sendToolResponse(id, name, { success: result.success, output: result.output });
+        await this._sendAutoScreenshot();
+        return;
       } else {
         result = { success: false, output: `Unknown tool: ${name}` };
       }
@@ -367,6 +396,17 @@ class GeminiLive {
         },
       }));
     }
+  }
+
+  async _sendAutoScreenshot() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const b64 = await window.electronAPI.takeScreenshot();
+    if (!b64) return;
+    this.ws.send(JSON.stringify({
+      realtimeInput: {
+        video: { mimeType: 'image/jpeg', data: b64 },
+      },
+    }));
   }
 
   sendText(text) {

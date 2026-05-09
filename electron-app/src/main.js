@@ -146,3 +146,10 @@ ipcMain.handle('open-app', (_e, name, url) => automation.openApp(name, url));
 ipcMain.handle('search-web', (_e, query) => automation.searchWeb(query));
 ipcMain.handle('show-notification', (_e, title, message) => automation.showNotification(title, message));
 ipcMain.handle('get-system-info', (_e, type) => automation.getSystemInfo(type));
+
+ipcMain.handle('computer-action', (_e, params) => {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const scaleX = width / 1280;
+  const scaleY = height / 720;
+  return automation.computerAction({ ...params, scaleX, scaleY });
+});

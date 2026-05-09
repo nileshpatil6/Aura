@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchWeb: (query) => ipcRenderer.invoke('search-web', query),
   showNotification: (title, msg) => ipcRenderer.invoke('show-notification', title, msg),
   getSystemInfo: (type) => ipcRenderer.invoke('get-system-info', type),
+  computerAction: (params) => ipcRenderer.invoke('computer-action', params),
 });

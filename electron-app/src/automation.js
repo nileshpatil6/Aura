@@ -176,4 +176,113 @@ if ($wifi) { "Connected to: $($wifi.Name) ($($wifi.NetworkCategory))" } else { "
   return runPowerShell(script);
 }
 
-module.exports = { runPowerShell, openApp, searchWeb, showNotification, getSystemInfo };
+// ── Computer control (mouse + keyboard via Win32 P/Invoke) ───────────────────
+
+// Reusable Win32 type definition - compiled once per PS process
+const WIN32_BLOCK = `
+$code = @'
+using System.Runtime.InteropServices;
+public class Win32Input {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, int d, int e);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, int e);
+    public const uint LD=2,LU=4,RD=8,RU=16,WHEEL=0x800,MOVE=0x8001;
+}
+'@
+if (-not ([System.Management.Automation.PSTypeName]'Win32Input').Type) {
+    Add-Type -TypeDefinition $code
+}
+`;
+
+function buildMouseScript(x, y, action) {
+  const base = `${WIN32_BLOCK}
+[Win32Input]::SetCursorPos(${x}, ${y})
+Start-Sleep -Milliseconds 120
+`;
+  switch (action) {
+    case 'click':
+      return base + `[Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)\nStart-Sleep -Milliseconds 60\n[Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0)\nWrite-Output "left-click at ${x},${y}"`;
+    case 'right_click':
+      return base + `[Win32Input]::mouse_event([Win32Input]::RD,0,0,0,0)\nStart-Sleep -Milliseconds 60\n[Win32Input]::mouse_event([Win32Input]::RU,0,0,0,0)\nWrite-Output "right-click at ${x},${y}"`;
+    case 'double_click':
+      return base + `[Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)\n[Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0)\nStart-Sleep -Milliseconds 80\n[Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)\n[Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0)\nWrite-Output "double-click at ${x},${y}"`;
+    case 'move':
+      return base + `Write-Output "moved to ${x},${y}"`;
+    default:
+      return `Write-Output "unknown action"`;
+  }
+}
+
+function buildScrollScript(x, y, direction, clicks) {
+  const delta = direction === 'up' ? 120 * clicks : -120 * clicks;
+  return `${WIN32_BLOCK}
+[Win32Input]::SetCursorPos(${x}, ${y})
+Start-Sleep -Milliseconds 80
+[Win32Input]::mouse_event([Win32Input]::WHEEL, 0, 0, ${delta}, 0)
+Write-Output "scrolled ${direction} ${clicks} clicks at ${x},${y}"`;
+}
+
+function buildTypeScript(text) {
+  // Escape for PowerShell SendKeys
+  const escaped = text
+    .replace(/\+/g, '{+}').replace(/\^/g, '{^}').replace(/%/g, '{%}')
+    .replace(/~/g, '{~}').replace(/\(/g, '{(}').replace(/\)/g, '{)}')
+    .replace(/\[/g, '{[}').replace(/\]/g, '{]}').replace(/\{/g, '{{').replace(/\}/g, '}}');
+  return `$wsh = New-Object -ComObject WScript.Shell
+$wsh.SendKeys('${escaped.replace(/'/g, "''")}')
+Write-Output "typed text"`;
+}
+
+function buildKeyScript(key) {
+  const keyMap = {
+    'enter': '{ENTER}', 'tab': '{TAB}', 'escape': '{ESC}', 'esc': '{ESC}',
+    'backspace': '{BACKSPACE}', 'delete': '{DELETE}', 'space': ' ',
+    'up': '{UP}', 'down': '{DOWN}', 'left': '{LEFT}', 'right': '{RIGHT}',
+    'home': '{HOME}', 'end': '{END}', 'pageup': '{PGUP}', 'pagedown': '{PGDN}',
+    'f5': '{F5}', 'f11': '{F11}', 'ctrl+a': '^a', 'ctrl+c': '^c',
+    'ctrl+v': '^v', 'ctrl+z': '^z', 'ctrl+t': '^t', 'ctrl+w': '^w',
+    'ctrl+r': '^r', 'ctrl+l': '^l', 'ctrl+f': '^f',
+  };
+  const mapped = keyMap[key.toLowerCase()] || `{${key.toUpperCase()}}`;
+  return `$wsh = New-Object -ComObject WScript.Shell
+$wsh.SendKeys('${mapped}')
+Write-Output "pressed ${key}"`;
+}
+
+async function computerAction({ action, x, y, text, key, direction, clicks, scaleX, scaleY }) {
+  // Scale from screenshot coords (1280x720) to actual screen coords
+  const sx = x != null ? Math.round(x * (scaleX || 1)) : 0;
+  const sy = y != null ? Math.round(y * (scaleY || 1)) : 0;
+  const scrollClicks = clicks || 3;
+
+  let script;
+  switch (action) {
+    case 'click':
+    case 'right_click':
+    case 'double_click':
+    case 'move':
+      script = buildMouseScript(sx, sy, action);
+      break;
+    case 'scroll_down':
+      script = buildScrollScript(sx, sy, 'down', scrollClicks);
+      break;
+    case 'scroll_up':
+      script = buildScrollScript(sx, sy, 'up', scrollClicks);
+      break;
+    case 'type':
+      script = buildTypeScript(text || '');
+      break;
+    case 'key':
+      script = buildKeyScript(key || 'enter');
+      break;
+    default:
+      return { success: false, output: `Unknown action: ${action}` };
+  }
+
+  const result = await runPowerShell(script);
+  // Small delay so UI has time to react before screenshot
+  await new Promise(r => setTimeout(r, 900));
+  return result;
+}
+
+module.exports = { runPowerShell, openApp, searchWeb, showNotification, getSystemInfo, computerAction };
