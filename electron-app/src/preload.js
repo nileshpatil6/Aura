@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   collapse: () => ipcRenderer.send('collapse'),
   resizeExpanded: () => ipcRenderer.send('resize-expanded'),
   resizeCollapsed: () => ipcRenderer.send('resize-collapsed'),
+  setIgnoreMouse: (v) => ipcRenderer.send('set-ignore-mouse', v),
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
   runPowerShell: (cmd) => ipcRenderer.invoke('run-powershell', cmd),
   openApp: (name, url) => ipcRenderer.invoke('open-app', name, url),

@@ -21,11 +21,11 @@
 body {
   background: transparent;
   overflow: hidden;
-  width: 480px;
+  width: 380px;
 }
 
 #app {
-  width: 480px;
+  width: 380px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -238,7 +238,7 @@ body {
    EXPANDED PANEL
 ══════════════════════════════════════════════ */
 .panel {
-  width: 460px;
+  width: 378px;
   margin-top: 3px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);

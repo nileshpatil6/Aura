@@ -6,17 +6,21 @@ let mainWindow = null;
 let tray = null;
 let isVisible = false;
 
-const COLLAPSED_HEIGHT = 56;
-const EXPANDED_HEIGHT = 340;
-const WINDOW_WIDTH = 460;
+const COLLAPSED_W = 88;
+const COLLAPSED_H = 56;
+const EXPANDED_W  = 380;
+const EXPANDED_H  = 360;
+
+function getCenter(w) {
+  const { width } = screen.getPrimaryDisplay().workAreaSize;
+  return Math.floor((width - w) / 2);
+}
 
 function createWindow() {
-  const { width } = screen.getPrimaryDisplay().workAreaSize;
-
   mainWindow = new BrowserWindow({
-    width: WINDOW_WIDTH,
-    height: COLLAPSED_HEIGHT,
-    x: Math.floor((width - WINDOW_WIDTH) / 2),
+    width: COLLAPSED_W,
+    height: COLLAPSED_H,
+    x: getCenter(COLLAPSED_W),
     y: 0,
     frame: false,
     transparent: true,
@@ -42,9 +46,10 @@ function createWindow() {
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
+  // Make transparent areas click-through while forwarding events to renderer
+  mainWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  mainWindow.on('closed', () => { mainWindow = null; });
 }
 
 function createTray() {
@@ -61,17 +66,9 @@ function createTray() {
   tray.setToolTip('Gemini Assistant');
 
   const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Toggle (Ctrl+Space)',
-      click: () => toggleAssistant(),
-    },
+    { label: 'Toggle (Ctrl+Space)', click: () => toggleAssistant() },
     { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => {
-        app.quit();
-      },
-    },
+    { label: 'Quit', click: () => app.quit() },
   ]);
 
   tray.setContextMenu(contextMenu);
@@ -80,7 +77,6 @@ function createTray() {
 
 function toggleAssistant() {
   if (!mainWindow) return;
-
   if (isVisible) {
     mainWindow.webContents.send('deactivate');
     collapseWindow();
@@ -95,48 +91,35 @@ function toggleAssistant() {
 
 function expandWindow() {
   if (!mainWindow) return;
-  mainWindow.setSize(WINDOW_WIDTH, EXPANDED_HEIGHT, true);
+  mainWindow.setBounds({ x: getCenter(EXPANDED_W), y: 0, width: EXPANDED_W, height: EXPANDED_H }, true);
 }
 
 function collapseWindow() {
   if (!mainWindow) return;
-  mainWindow.setSize(WINDOW_WIDTH, COLLAPSED_HEIGHT, true);
+  mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
 }
 
 app.whenReady().then(() => {
   createWindow();
   createTray();
 
-  globalShortcut.register('Control+Space', () => {
-    toggleAssistant();
-  });
+  globalShortcut.register('Control+Space', () => toggleAssistant());
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-app.on('will-quit', () => {
-  globalShortcut.unregisterAll();
-});
+app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
+ipcMain.on('collapse', () => { collapseWindow(); isVisible = false; });
+ipcMain.on('resize-expanded', () => expandWindow());
+ipcMain.on('resize-collapsed', () => collapseWindow());
 
-ipcMain.on('collapse', () => {
-  collapseWindow();
-  isVisible = false;
-});
-
-ipcMain.on('resize-expanded', () => {
-  expandWindow();
-});
-
-ipcMain.on('resize-collapsed', () => {
-  collapseWindow();
+// Toggle click-through: transparent areas pass clicks to windows below
+ipcMain.on('set-ignore-mouse', (_e, ignore) => {
+  mainWindow?.setIgnoreMouseEvents(ignore, { forward: true });
 });
 
 ipcMain.handle('take-screenshot', async () => {

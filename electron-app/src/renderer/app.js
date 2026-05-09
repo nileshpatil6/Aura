@@ -205,5 +205,12 @@ if (window.electronAPI) {
   window.electronAPI.onDeactivate(() => { if (isOpen) closeAssistant(); });
 }
 
+// ──── Click-through: ignore mouse on transparent areas ────────────────────────
+document.addEventListener('mousemove', (e) => {
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const overUI = el && el.id !== 'app' && el !== document.body && el !== document.documentElement;
+  window.electronAPI?.setIgnoreMouse(!overUI);
+});
+
 // ──── Init ────────────────────────────────────────────────────────────────────
 setState('idle');
