@@ -71,6 +71,18 @@
       <!-- Footer -->
       <div class="panel-footer">
         <button id="keyboard-btn" class="footer-btn">⌨  Type instead</button>
+        <button id="settings-btn" class="footer-btn settings-btn" title="API Key settings">&#9881;</button>
+      </div>
+
+      <!-- Settings overlay -->
+      <div id="settings-overlay" class="settings-overlay hidden">
+        <div class="settings-title">Gemini API Key</div>
+        <input id="api-key-input" class="text-input" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false" />
+        <div class="settings-hint">Get your key at <span class="settings-link">aistudio.google.com</span></div>
+        <div class="settings-actions">
+          <button id="settings-cancel" class="footer-btn">Cancel</button>
+          <button id="settings-save" class="save-btn">Save &amp; Connect</button>
+        </div>
       </div>
     </div>
   </div>

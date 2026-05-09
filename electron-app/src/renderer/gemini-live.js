@@ -1,29 +1,27 @@
-const GEMINI_API_KEY = 'REMOVED_API_KEY';
-const WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${GEMINI_API_KEY}`;
+const WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const MODEL = 'models/gemini-3.1-flash-live-preview';
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 
-const SYSTEM_PROMPT = `You are a powerful Windows desktop AI assistant. You can control the computer using tools.
+const SYSTEM_PROMPT = `You are a powerful Windows desktop AI assistant (like a smarter Siri). You can control the computer using tools.
 
 CAPABILITIES:
 - open_application: Open any app (WhatsApp, Chrome, Spotify, VS Code, Notepad, Settings, etc.)
-- run_command: Execute PowerShell for any Windows automation task
-- search_web: Open a web search or URL in the browser
+- run_command: Execute PowerShell for anything else — set volume, brightness, manage files, get weather, create files, control media, search files, manage processes, send emails via Outlook, etc.
+- search_web: Open a Google search or specific URL in the browser
 - show_notification: Show a Windows toast notification
-- get_system_info: Get time/date, battery, memory, disk, processes, IP, clipboard
-- capture_screen: See what's on the user's screen right now
-- computer_action: Click, type, scroll, or press keys. The tool response includes a REAL visual verification from a separate AI that actually looked at the screenshot — trust that description, it is ground truth.
+- get_system_info: Get time/date, battery, memory, disk, running processes, IP, clipboard
+- capture_screen: See what's on the user's screen
+- computer_action: Click, type, scroll, or press keys on screen. After each action you automatically get a fresh screenshot so you can decide the next step.
 
-TASK PLANNING:
-- For any multi-step task, first say your plan out loud as numbered steps before doing anything. Example: "I will: 1. Open Chrome, 2. Click address bar, 3. Type the URL, 4. Press Enter."
-- Execute each step one at a time.
-
-VERIFICATION:
-- After each computer_action, the tool response contains "Visual verification:" — this is a real description of what is actually on the screen right now from an AI that looked at the screenshot. Read it carefully.
-- Use the verification text to decide if the step succeeded or if you need to retry or adjust coordinates.
-- Only tell the user a task is done when the verification confirms it visually.
-- Max 15 steps per task.`;
+AUTONOMOUS MULTI-STEP BEHAVIOR:
+- When given a multi-step task (e.g. "open chrome and search cats"), execute each step as a computer_action, then analyze the screenshot that comes back, and keep acting until the task is complete — no user input needed between steps.
+- After computer_action you receive the updated screen. Use it to verify progress and decide what to do next.
+- Coordinates are in the 1280x720 screenshot space.
+- For clicking UI elements, use capture_screen first to see the screen, then computer_action to click the target.
+- For typing: click the input field first (computer_action click), then type (computer_action type).
+- Stop acting when the goal is achieved or after 10 steps.
+- Keep spoken responses short — one or two sentences max.`;
 
 const TOOLS = [{
   functionDeclarations: [
@@ -232,9 +230,11 @@ class GeminiLive {
 
   async connect() {
     if (this.connected) return;
+    const apiKey = localStorage.getItem('gemini_api_key') || '';
+    if (!apiKey) throw new Error('NO_API_KEY');
     this.callbacks.onStateChange('listening');
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
     this.ws = ws;
 
     ws.onopen = () => {
@@ -351,21 +351,11 @@ class GeminiLive {
       } else if (name === 'get_system_info') {
         result = await window.electronAPI.getSystemInfo(args.type);
       } else if (name === 'computer_action') {
-        this.callbacks.onTranscript(`→ ${args.action}${args.text ? ` "${args.text}"` : ''}${args.x != null ? ` (${args.x},${args.y})` : ''}`);
+        this.callbacks.onTranscript(`Action: ${args.action}${args.text ? ` "${args.text}"` : ''}…`);
         result = await window.electronAPI.computerAction(args);
-
-        // Take clean screenshot (overlay hidden) then verify via separate REST vision call
-        const b64 = await window.electronAPI.takeScreenshotClean();
-        let verification = 'Screenshot unavailable.';
-        if (b64) {
-          verification = await this._verifyActionWithVision(b64, args);
-          this.callbacks.onTranscript(`✓ ${verification}`);
-        }
-
-        this._sendToolResponse(id, name, {
-          success: result.success,
-          output: `Action result: ${result.output}\nVisual verification: ${verification}\nBased on this, decide if the task step succeeded or if you need to take another action.`,
-        });
+        // autonomous loop: send result then auto-screenshot so Gemini sees updated screen
+        this._sendToolResponse(id, name, { success: result.success, output: result.output });
+        await this._sendAutoScreenshot();
         return;
       } else {
         result = { success: false, output: `Unknown tool: ${name}` };
@@ -394,54 +384,11 @@ class GeminiLive {
     }));
   }
 
-  async _verifyActionWithVision(b64, args) {
-    const desc = args.action === 'type'
-      ? `typed the text "${args.text}"`
-      : args.action === 'key'
-      ? `pressed key "${args.key}"`
-      : args.action === 'click'
-      ? `left-clicked at position (${args.x}, ${args.y}) on a 1280x720 screenshot`
-      : args.action === 'double_click'
-      ? `double-clicked at (${args.x}, ${args.y})`
-      : args.action === 'right_click'
-      ? `right-clicked at (${args.x}, ${args.y})`
-      : `${args.action} at (${args.x ?? ''}, ${args.y ?? ''})`;
-
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { inlineData: { mimeType: 'image/jpeg', data: b64 } },
-                { text: `I just performed this action on a Windows PC: "${desc}". Look at this screenshot and answer in 2 sentences: (1) what is currently visible on screen, (2) did the action succeed — yes or no and why.` },
-              ],
-            }],
-            generationConfig: { maxOutputTokens: 150 },
-          }),
-        }
-      );
-      const data = await res.json();
-      if (data.error) {
-        console.error('Vision API error:', data.error);
-        return `Vision API error: ${data.error.message}`;
-      }
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      return text || 'Vision model returned empty response.';
-    } catch (e) {
-      console.error('Vision check exception:', e);
-      return `Vision check failed: ${e.message}`;
-    }
-  }
-
   async _toolCaptureScreen(callId) {
     const b64 = await window.electronAPI.takeScreenshot();
     this._sendToolResponse(callId, 'capture_screen', {
       success: !!b64,
-      output: b64 ? 'Screenshot attached. Describe exactly what you see and use it to answer accurately.' : 'No screen found.',
+      output: b64 ? 'screenshot_ready' : 'no_screen_found',
     });
     if (b64) {
       this.ws.send(JSON.stringify({
@@ -450,6 +397,17 @@ class GeminiLive {
         },
       }));
     }
+  }
+
+  async _sendAutoScreenshot() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const b64 = await window.electronAPI.takeScreenshot();
+    if (!b64) return;
+    this.ws.send(JSON.stringify({
+      realtimeInput: {
+        video: { mimeType: 'image/jpeg', data: b64 },
+      },
+    }));
   }
 
   sendText(text) {

@@ -1,22 +1,27 @@
 // ──── DOM refs ────────────────────────────────────────────────────────────────
-const closeBtn      = document.getElementById('close-btn');
-const orbWrap       = document.getElementById('orb-wrap');
-const orbIcon       = document.getElementById('orb-icon');
-const pillWaveEl    = document.getElementById('pill-wave');
-const panel         = document.getElementById('panel');
-const statusText    = document.getElementById('status-text');
-const visualizer    = document.getElementById('visualizer');
-const barsEl        = document.getElementById('bars');
-const thinkingAnim  = document.getElementById('thinking-anim');
-const speakingAnim  = document.getElementById('speaking-anim');
-const waveBarsEl    = document.getElementById('wave-bars');
-const transcriptEl  = document.getElementById('transcript');
-const userTextEl    = document.getElementById('user-text');
-const textInputRow  = document.getElementById('text-input-row');
-const textInput     = document.getElementById('text-input');
-const sendBtn       = document.getElementById('send-btn');
-const errorBox      = document.getElementById('error-box');
-const keyboardBtn   = document.getElementById('keyboard-btn');
+const closeBtn        = document.getElementById('close-btn');
+const orbWrap         = document.getElementById('orb-wrap');
+const orbIcon         = document.getElementById('orb-icon');
+const pillWaveEl      = document.getElementById('pill-wave');
+const panel           = document.getElementById('panel');
+const statusText      = document.getElementById('status-text');
+const visualizer      = document.getElementById('visualizer');
+const barsEl          = document.getElementById('bars');
+const thinkingAnim    = document.getElementById('thinking-anim');
+const speakingAnim    = document.getElementById('speaking-anim');
+const waveBarsEl      = document.getElementById('wave-bars');
+const transcriptEl    = document.getElementById('transcript');
+const userTextEl      = document.getElementById('user-text');
+const textInputRow    = document.getElementById('text-input-row');
+const textInput       = document.getElementById('text-input');
+const sendBtn         = document.getElementById('send-btn');
+const errorBox        = document.getElementById('error-box');
+const keyboardBtn     = document.getElementById('keyboard-btn');
+const settingsBtn     = document.getElementById('settings-btn');
+const settingsOverlay = document.getElementById('settings-overlay');
+const apiKeyInput     = document.getElementById('api-key-input');
+const settingsSave    = document.getElementById('settings-save');
+const settingsCancel  = document.getElementById('settings-cancel');
 
 // ──── Build panel visualizer bars ─────────────────────────────────────────────
 const BAR_COUNT = 22;
@@ -83,12 +88,10 @@ function setState(state) {
   if (pathEl) pathEl.setAttribute('d', ICONS[state] || ICONS.idle);
   statusText.textContent = STATUS_LABELS[state];
 
-  // Panel sub-sections
   visualizer.classList.toggle('hidden',   state !== 'listening');
   thinkingAnim.classList.toggle('hidden', state !== 'thinking');
   speakingAnim.classList.toggle('hidden', state !== 'speaking');
 
-  // Pill mini waveform: visible when open and listening
   pillWaveEl.classList.toggle('visible', isOpen && state === 'listening');
 }
 
@@ -110,18 +113,59 @@ function showError(msg) {
   errorBox.classList.remove('hidden');
 }
 
-// ──── Visualizer update (shared for panel bars + pill mini bars) ───────────────
+// ──── Visualizer update ───────────────────────────────────────────────────────
 function onVisualizerBars(bars) {
-  // Panel bars (full 20 bars)
   const barEls = barsEl.querySelectorAll('.bar');
   bars.forEach((h, i) => { if (barEls[i]) barEls[i].style.height = `${h}px`; });
 
-  // Pill mini bars (downsample to PILL_BAR_COUNT)
   pillBarEls.forEach((el, i) => {
     const idx = Math.floor((i / PILL_BAR_COUNT) * bars.length);
     el.style.height = `${Math.max(3, bars[idx] * 0.7)}px`;
   });
 }
+
+// ──── Settings ────────────────────────────────────────────────────────────────
+function openSettings() {
+  apiKeyInput.value = localStorage.getItem('gemini_api_key') || '';
+  settingsOverlay.classList.remove('hidden');
+  setTimeout(() => apiKeyInput.focus(), 40);
+}
+
+function closeSettings() {
+  settingsOverlay.classList.add('hidden');
+}
+
+async function saveSettings() {
+  const key = apiKeyInput.value.trim();
+  if (!key) return;
+  localStorage.setItem('gemini_api_key', key);
+  closeSettings();
+  if (!isOpen) return;
+  // Panel open but no gemini yet (first-run flow) — start fresh
+  if (!gemini) {
+    gemini = new GeminiLive({
+      onStateChange: setState,
+      onTranscript:  appendTranscript,
+      onUserText:    setUserText,
+      onError:       showError,
+      onReady: () => { stopVisualizer = gemini.startVisualizer(onVisualizerBars); },
+    });
+    setState('listening');
+  }
+  if (!gemini.connected) {
+    errorBox.classList.add('hidden');
+    try {
+      await gemini.connect();
+    } catch (err) {
+      showError(err?.message || 'Failed to connect.');
+    }
+  }
+}
+
+settingsBtn.addEventListener('click', openSettings);
+settingsCancel.addEventListener('click', closeSettings);
+settingsSave.addEventListener('click', saveSettings);
+apiKeyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSettings(); });
 
 // ──── Open / Close ────────────────────────────────────────────────────────────
 async function openAssistant() {
@@ -131,6 +175,7 @@ async function openAssistant() {
   transcriptEl.classList.add('hidden');
   userTextEl.classList.add('hidden');
   errorBox.classList.add('hidden');
+  settingsOverlay.classList.add('hidden');
   closeBtn.classList.remove('hidden');
 
   panel.classList.remove('hidden');
@@ -141,13 +186,18 @@ async function openAssistant() {
 
   window.electronAPI?.resizeExpanded();
 
+  // No key saved — show settings immediately
+  if (!localStorage.getItem('gemini_api_key')) {
+    openSettings();
+    return;
+  }
+
   gemini = new GeminiLive({
     onStateChange: setState,
     onTranscript:  appendTranscript,
     onUserText:    setUserText,
     onError:       showError,
     onReady: () => {
-      // Stream is live - start visualizer immediately
       stopVisualizer = gemini.startVisualizer(onVisualizerBars);
     },
   });
@@ -157,7 +207,11 @@ async function openAssistant() {
   try {
     await gemini.connect();
   } catch (err) {
-    showError(err?.message || 'Failed to connect to Gemini.');
+    if (err?.message === 'NO_API_KEY') {
+      openSettings();
+    } else {
+      showError(err?.message || 'Failed to connect to Gemini.');
+    }
   }
 }
 
@@ -172,6 +226,7 @@ function closeAssistant() {
   panel.classList.add('hidden');
   textInputRow.classList.add('hidden');
   closeBtn.classList.add('hidden');
+  settingsOverlay.classList.add('hidden');
 
   window.electronAPI?.resizeCollapsed();
   setState('idle');

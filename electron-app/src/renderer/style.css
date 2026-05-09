@@ -531,6 +531,68 @@ body {
   border-color: rgba(255,255,255,0.18);
 }
 
+.settings-btn {
+  margin-left: 6px;
+  font-size: 14px;
+  padding: 5px 9px;
+}
+
+/* ══════════════════════════════════════════════
+   SETTINGS OVERLAY
+══════════════════════════════════════════════ */
+.settings-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  background: rgba(9,9,20,0.97);
+  backdrop-filter: blur(20px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 22px 20px 18px;
+  animation: panelIn 0.2s cubic-bezier(0.16,1,0.3,1) both;
+}
+
+.settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.9);
+  letter-spacing: 0.01em;
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+}
+
+.settings-link {
+  color: rgba(139,92,246,0.85);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.save-btn {
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s;
+  -webkit-app-region: no-drag;
+  letter-spacing: 0.02em;
+}
+.save-btn:hover { opacity: 0.88; }
+.save-btn:active { transform: scale(0.97); }
+
 /* ══════════════════════════════════════════════
    UTILS
 ══════════════════════════════════════════════ */
