@@ -352,8 +352,11 @@ class GeminiLive {
       } else if (name === 'computer_action') {
         this.callbacks.onTranscript(`Action: ${args.action}${args.text ? ` "${args.text}"` : ''}…`);
         result = await window.electronAPI.computerAction(args);
-        // autonomous loop: send result then auto-screenshot so Gemini sees updated screen
-        this._sendToolResponse(id, name, { success: result.success, output: result.output });
+        // Send tool result with explicit instruction to verify via screenshot
+        this._sendToolResponse(id, name, {
+          success: result.success,
+          output: `${result.output}. Screenshot of the current screen is attached — look at it carefully, verify whether the task is complete, and if not, perform the next required action. Do NOT say the task is done unless you can see it is actually done in the screenshot.`,
+        });
         await this._sendAutoScreenshot();
         return;
       } else {
@@ -387,7 +390,7 @@ class GeminiLive {
     const b64 = await window.electronAPI.takeScreenshot();
     this._sendToolResponse(callId, 'capture_screen', {
       success: !!b64,
-      output: b64 ? 'screenshot_ready' : 'no_screen_found',
+      output: b64 ? 'Screenshot attached. Describe exactly what you see and use it to answer accurately.' : 'No screen found.',
     });
     if (b64) {
       this.ws.send(JSON.stringify({

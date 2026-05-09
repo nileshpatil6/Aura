@@ -148,8 +148,11 @@ ipcMain.handle('show-notification', (_e, title, message) => automation.showNotif
 ipcMain.handle('get-system-info', (_e, type) => automation.getSystemInfo(type));
 
 ipcMain.handle('computer-action', (_e, params) => {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-  const scaleX = width / 1280;
-  const scaleY = height / 720;
+  const display = screen.getPrimaryDisplay();
+  // SetCursorPos needs physical pixels; bounds are logical, so multiply by DPI scaleFactor
+  const physW = display.bounds.width * display.scaleFactor;
+  const physH = display.bounds.height * display.scaleFactor;
+  const scaleX = physW / 1280;
+  const scaleY = physH / 720;
   return automation.computerAction({ ...params, scaleX, scaleY });
 });
