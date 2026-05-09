@@ -400,7 +400,7 @@ class GeminiLive {
       : args.action === 'key'
       ? `pressed key "${args.key}"`
       : args.action === 'click'
-      ? `left-clicked at screen position (${args.x}, ${args.y}) out of 1280x720`
+      ? `left-clicked at position (${args.x}, ${args.y}) on a 1280x720 screenshot`
       : args.action === 'double_click'
       ? `double-clicked at (${args.x}, ${args.y})`
       : args.action === 'right_click'
@@ -409,7 +409,7 @@ class GeminiLive {
 
     try {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -417,7 +417,7 @@ class GeminiLive {
             contents: [{
               parts: [
                 { inlineData: { mimeType: 'image/jpeg', data: b64 } },
-                { text: `I just performed this action on a Windows PC: "${desc}". Look at this screenshot and in 2 sentences: (1) describe exactly what is visible on screen right now, (2) state whether the action succeeded or not and why.` },
+                { text: `I just performed this action on a Windows PC: "${desc}". Look at this screenshot and answer in 2 sentences: (1) what is currently visible on screen, (2) did the action succeed — yes or no and why.` },
               ],
             }],
             generationConfig: { maxOutputTokens: 150 },
@@ -425,8 +425,14 @@ class GeminiLive {
         }
       );
       const data = await res.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? 'No response from vision check.';
+      if (data.error) {
+        console.error('Vision API error:', data.error);
+        return `Vision API error: ${data.error.message}`;
+      }
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      return text || 'Vision model returned empty response.';
     } catch (e) {
+      console.error('Vision check exception:', e);
       return `Vision check failed: ${e.message}`;
     }
   }

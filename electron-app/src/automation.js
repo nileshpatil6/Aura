@@ -164,7 +164,7 @@ $os = Get-CimInstance Win32_OperatingSystem
 $total = [Math]::Round($os.TotalVisibleMemorySize/1MB, 1)
 $free = [Math]::Round($os.FreePhysicalMemory/1MB, 1)
 $used = [Math]::Round($total - $free, 1)
-"Memory: ${used}GB used / ${total}GB total ($([Math]::Round($used/$total*100))% used)"`,
+"Memory: \${used}GB used / \${total}GB total ($([Math]::Round(\${used}/\${total}*100))% used)"`,
     wifi: `
 $wifi = Get-NetConnectionProfile | Select-Object -First 1
 if ($wifi) { "Connected to: $($wifi.Name) ($($wifi.NetworkCategory))" } else { "No network connection" }`,
