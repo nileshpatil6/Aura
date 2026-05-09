@@ -16,12 +16,12 @@ CAPABILITIES:
 - computer_action: Click, type, scroll, or press keys on screen. After each action you automatically get a fresh screenshot so you can decide the next step.
 
 AUTONOMOUS MULTI-STEP BEHAVIOR:
-- STRICT RULE: After EVERY computer_action, you MUST call capture_screen immediately. No exceptions. You cannot claim a task is done without seeing the screen first.
-- Workflow for any computer task: capture_screen → see UI → computer_action → capture_screen → verify → repeat until done.
-- Coordinates are in 1280x720 screenshot space. Look at the screenshot carefully to find the exact pixel position of UI elements before clicking.
-- For typing: click the input field first, then type.
-- Stop when capture_screen confirms the goal is achieved. Max 15 steps.
-- Keep spoken responses short — one or two sentences max.`;
+- Every computer_action automatically captures a fresh screenshot of the result and sends it to you BEFORE the tool response arrives. This means you will always see the current screen state as part of the tool result — use it.
+- Workflow: capture_screen to find coordinates → computer_action (screenshot auto-attached) → decide next step from what you see → repeat until goal is visually confirmed in the screenshot.
+- Coordinates are 1280x720. Examine the screenshot carefully to find exact pixel positions of buttons, inputs, and links.
+- For typing: click the input field first, then use action=type.
+- NEVER say a task is complete unless the screenshot you just received visually confirms it. If you cannot see confirmation, take another action.
+- Max 15 steps. Keep spoken responses short.`;
 
 const TOOLS = [{
   functionDeclarations: [
@@ -351,9 +351,22 @@ class GeminiLive {
       } else if (name === 'computer_action') {
         this.callbacks.onTranscript(`Action: ${args.action}${args.text ? ` "${args.text}"` : ''}…`);
         result = await window.electronAPI.computerAction(args);
+
+        // Take clean screenshot (overlay hidden) so Gemini sees the real screen
+        const b64 = await window.electronAPI.takeScreenshotClean();
+
+        // Send screenshot BEFORE toolResponse — it lands in model context first
+        // so when the model reads the tool result it already has the visual
+        if (b64 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({
+            realtimeInput: { video: { mimeType: 'image/jpeg', data: b64 } },
+          }));
+          await new Promise(r => setTimeout(r, 150));
+        }
+
         this._sendToolResponse(id, name, {
           success: result.success,
-          output: `${result.output}. NOW call capture_screen to see what is on the screen and verify the result. You must not respond to the user until you have called capture_screen and confirmed visually.`,
+          output: `${result.output}. The screenshot you just received in the video frame shows the current screen. Analyze it — is the task visually complete? If not, perform the next action.`,
         });
         return;
       } else {

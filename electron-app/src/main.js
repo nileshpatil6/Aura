@@ -132,13 +132,24 @@ ipcMain.on('set-ignore-mouse', (_e, ignore) => {
   mainWindow?.setIgnoreMouseEvents(ignore, { forward: true });
 });
 
-ipcMain.handle('take-screenshot', async () => {
+async function captureScreen() {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: { width: 1280, height: 720 },
   });
   if (!sources.length) return null;
   return sources[0].thumbnail.toJPEG(80).toString('base64');
+}
+
+ipcMain.handle('take-screenshot', captureScreen);
+
+// Hide overlay, capture clean screenshot, restore — used for action verification
+ipcMain.handle('take-screenshot-clean', async () => {
+  if (mainWindow) mainWindow.hide();
+  await new Promise(r => setTimeout(r, 180));
+  const b64 = await captureScreen();
+  if (mainWindow) mainWindow.show();
+  return b64;
 });
 
 ipcMain.handle('run-powershell', (_e, command) => automation.runPowerShell(command));
