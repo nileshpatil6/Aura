@@ -38,19 +38,19 @@ body {
 .pill {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 18px 8px 10px;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px 6px 8px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-top: none;
-  border-radius: 0 0 26px 26px;
+  border-radius: 0 0 28px 28px;
   backdrop-filter: blur(28px) saturate(1.8);
   -webkit-backdrop-filter: blur(28px) saturate(1.8);
   box-shadow:
     0 8px 32px rgba(139, 92, 246, 0.18),
     0 2px 8px rgba(0, 0, 0, 0.5),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  min-width: 180px;
   transition: box-shadow 0.4s ease;
   -webkit-app-region: drag;
   position: relative;
@@ -65,23 +65,13 @@ body {
   pointer-events: none;
 }
 
-.pill-label {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: rgba(255,255,255,0.45);
-  letter-spacing: 0.06em;
-  flex: 1;
-  text-align: center;
-  transition: opacity 0.3s;
-}
-
 /* ══════════════════════════════════════════════
    SIRI ORB
 ══════════════════════════════════════════════ */
 .orb-wrap {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
   cursor: pointer;
@@ -198,6 +188,26 @@ body {
   initial-value: 0deg;
 }
 
+/* ── Pill mini waveform (shown when open/listening) ── */
+#pill-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+#pill-wave.visible { opacity: 1; }
+.pill-wave-bar {
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(to top, rgba(139,92,246,0.7), rgba(167,139,250,1));
+  transition: height 0.06s ease-out;
+  min-height: 3px;
+  box-shadow: 0 0 4px rgba(139,92,246,0.5);
+}
+
 /* ══════════════════════════════════════════════
    CLOSE BTN
 ══════════════════════════════════════════════ */
@@ -206,9 +216,9 @@ body {
   border: 1px solid rgba(255,255,255,0.1);
   color: rgba(255,255,255,0.35);
   cursor: pointer;
-  font-size: 11px;
-  width: 22px;
-  height: 22px;
+  font-size: 10px;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;

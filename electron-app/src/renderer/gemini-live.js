@@ -256,6 +256,7 @@ class GeminiLive {
         this.connected = true;
         this.callbacks.onStateChange('listening');
         await this.startRecording();
+        this.callbacks.onReady?.();
         return;
       }
 

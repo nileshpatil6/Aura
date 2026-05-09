@@ -6,7 +6,7 @@ let mainWindow = null;
 let tray = null;
 let isVisible = false;
 
-const COLLAPSED_HEIGHT = 72;
+const COLLAPSED_HEIGHT = 56;
 const EXPANDED_HEIGHT = 340;
 const WINDOW_WIDTH = 460;
 

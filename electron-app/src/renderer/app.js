@@ -1,9 +1,8 @@
 // ──── DOM refs ────────────────────────────────────────────────────────────────
-const pill          = document.getElementById('pill');
-const pillLabel     = document.getElementById('pill-label');
 const closeBtn      = document.getElementById('close-btn');
 const orbWrap       = document.getElementById('orb-wrap');
 const orbIcon       = document.getElementById('orb-icon');
+const pillWaveEl    = document.getElementById('pill-wave');
 const panel         = document.getElementById('panel');
 const statusText    = document.getElementById('status-text');
 const visualizer    = document.getElementById('visualizer');
@@ -19,13 +18,24 @@ const sendBtn       = document.getElementById('send-btn');
 const errorBox      = document.getElementById('error-box');
 const keyboardBtn   = document.getElementById('keyboard-btn');
 
-// ──── Build visualizer bars ────────────────────────────────────────────────────
+// ──── Build panel visualizer bars ─────────────────────────────────────────────
 const BAR_COUNT = 22;
 for (let i = 0; i < BAR_COUNT; i++) {
   const b = document.createElement('div');
   b.className = 'bar';
   b.style.height = '5px';
   barsEl.appendChild(b);
+}
+
+// ──── Build pill mini waveform bars ───────────────────────────────────────────
+const PILL_BAR_COUNT = 12;
+const pillBarEls = [];
+for (let i = 0; i < PILL_BAR_COUNT; i++) {
+  const b = document.createElement('div');
+  b.className = 'pill-wave-bar';
+  b.style.height = '3px';
+  pillWaveEl.appendChild(b);
+  pillBarEls.push(b);
 }
 
 // ──── Build speaking wave bars ─────────────────────────────────────────────────
@@ -36,20 +46,19 @@ for (let i = 0; i < WAVE_COUNT; i++) {
   b.className = 'wave-bar';
   const frac = i / WAVE_COUNT;
   const h = 4 + Math.sin(frac * Math.PI) * 28;
-  const colorIdx = Math.floor(frac * waveColors.length);
   b.style.height = `${h}px`;
-  b.style.background = waveColors[colorIdx];
+  b.style.background = waveColors[Math.floor(frac * waveColors.length)];
   b.style.animationDelay = `${(frac * 0.55).toFixed(3)}s`;
   waveBarsEl.appendChild(b);
 }
 
 // ──── State ───────────────────────────────────────────────────────────────────
-let isOpen          = false;
-let currentState    = 'idle';
-let gemini          = null;
-let stopVisualizer  = null;
-let showingInput    = false;
-let transcriptText  = '';
+let isOpen         = false;
+let currentState   = 'idle';
+let gemini         = null;
+let stopVisualizer = null;
+let showingInput   = false;
+let transcriptText = '';
 
 // ──── Icon paths per state ─────────────────────────────────────────────────────
 const ICONS = {
@@ -60,7 +69,7 @@ const ICONS = {
 };
 
 const STATUS_LABELS = {
-  idle:      'Ctrl+Space',
+  idle:      '',
   listening: 'Listening…',
   thinking:  'Thinking…',
   speaking:  'Speaking…',
@@ -69,22 +78,18 @@ const STATUS_LABELS = {
 // ──── Set state ────────────────────────────────────────────────────────────────
 function setState(state) {
   currentState = state;
-
-  // Orb class
   orbWrap.className = `orb-wrap ${state}`;
-
-  // Icon
   const pathEl = orbIcon.querySelector('path');
   if (pathEl) pathEl.setAttribute('d', ICONS[state] || ICONS.idle);
-
-  // Labels
-  pillLabel.textContent = isOpen ? '' : STATUS_LABELS[state];
   statusText.textContent = STATUS_LABELS[state];
 
-  // Show/hide sub-panels
-  visualizer.classList.toggle('hidden',    state !== 'listening');
-  thinkingAnim.classList.toggle('hidden',  state !== 'thinking');
-  speakingAnim.classList.toggle('hidden',  state !== 'speaking');
+  // Panel sub-sections
+  visualizer.classList.toggle('hidden',   state !== 'listening');
+  thinkingAnim.classList.toggle('hidden', state !== 'thinking');
+  speakingAnim.classList.toggle('hidden', state !== 'speaking');
+
+  // Pill mini waveform: visible when open and listening
+  pillWaveEl.classList.toggle('visible', isOpen && state === 'listening');
 }
 
 // ──── Helpers ─────────────────────────────────────────────────────────────────
@@ -101,8 +106,21 @@ function setUserText(text) {
 }
 
 function showError(msg) {
-  errorBox.textContent = '⚠️  ' + msg;
+  errorBox.textContent = '⚠  ' + msg;
   errorBox.classList.remove('hidden');
+}
+
+// ──── Visualizer update (shared for panel bars + pill mini bars) ───────────────
+function onVisualizerBars(bars) {
+  // Panel bars (full 20 bars)
+  const barEls = barsEl.querySelectorAll('.bar');
+  bars.forEach((h, i) => { if (barEls[i]) barEls[i].style.height = `${h}px`; });
+
+  // Pill mini bars (downsample to PILL_BAR_COUNT)
+  pillBarEls.forEach((el, i) => {
+    const idx = Math.floor((i / PILL_BAR_COUNT) * bars.length);
+    el.style.height = `${Math.max(3, bars[idx] * 0.7)}px`;
+  });
 }
 
 // ──── Open / Close ────────────────────────────────────────────────────────────
@@ -113,13 +131,10 @@ async function openAssistant() {
   transcriptEl.classList.add('hidden');
   userTextEl.classList.add('hidden');
   errorBox.classList.add('hidden');
-
   closeBtn.classList.remove('hidden');
-  pillLabel.textContent = '';
 
-  // Remove old panel, re-add so animation replays
   panel.classList.remove('hidden');
-  void panel.offsetWidth; // reflow
+  void panel.offsetWidth;
   panel.style.animation = 'none';
   void panel.offsetWidth;
   panel.style.animation = '';
@@ -131,24 +146,16 @@ async function openAssistant() {
     onTranscript:  appendTranscript,
     onUserText:    setUserText,
     onError:       showError,
+    onReady: () => {
+      // Stream is live - start visualizer immediately
+      stopVisualizer = gemini.startVisualizer(onVisualizerBars);
+    },
   });
 
   setState('listening');
 
   try {
     await gemini.connect();
-
-    // Boot visualizer once mic stream is ready
-    setTimeout(() => {
-      if (gemini?.stream) {
-        stopVisualizer = gemini.startVisualizer((bars) => {
-          const barEls = barsEl.querySelectorAll('.bar');
-          bars.forEach((h, i) => {
-            if (barEls[i]) barEls[i].style.height = `${h}px`;
-          });
-        });
-      }
-    }, 1000);
   } catch (err) {
     showError(err?.message || 'Failed to connect to Gemini.');
   }
@@ -157,6 +164,7 @@ async function openAssistant() {
 function closeAssistant() {
   isOpen = false;
   showingInput = false;
+  pillWaveEl.classList.remove('visible');
 
   if (stopVisualizer) { stopVisualizer(); stopVisualizer = null; }
   if (gemini)         { gemini.disconnect(); gemini = null; }
@@ -164,17 +172,13 @@ function closeAssistant() {
   panel.classList.add('hidden');
   textInputRow.classList.add('hidden');
   closeBtn.classList.add('hidden');
-  pillLabel.textContent = 'Ctrl+Space';
 
   window.electronAPI?.resizeCollapsed();
   setState('idle');
 }
 
 // ──── Event listeners ──────────────────────────────────────────────────────────
-orbWrap.addEventListener('click', () => {
-  if (!isOpen) openAssistant();
-});
-
+orbWrap.addEventListener('click', () => { if (!isOpen) openAssistant(); });
 closeBtn.addEventListener('click', closeAssistant);
 
 keyboardBtn.addEventListener('click', () => {
@@ -195,12 +199,11 @@ function submitText() {
   textInputRow.classList.add('hidden');
 }
 
-// ──── Electron IPC (global shortcut callback) ─────────────────────────────────
+// ──── Electron IPC ────────────────────────────────────────────────────────────
 if (window.electronAPI) {
   window.electronAPI.onActivate(() => { if (!isOpen) openAssistant(); });
   window.electronAPI.onDeactivate(() => { if (isOpen) closeAssistant(); });
 }
-
 
 // ──── Init ────────────────────────────────────────────────────────────────────
 setState('idle');
