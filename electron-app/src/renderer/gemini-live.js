@@ -16,12 +16,11 @@ CAPABILITIES:
 - computer_action: Click, type, scroll, or press keys on screen. After each action you automatically get a fresh screenshot so you can decide the next step.
 
 AUTONOMOUS MULTI-STEP BEHAVIOR:
-- When given a multi-step task (e.g. "open chrome and search cats"), execute each step as a computer_action, then analyze the screenshot that comes back, and keep acting until the task is complete — no user input needed between steps.
-- After computer_action you receive the updated screen. Use it to verify progress and decide what to do next.
-- Coordinates are in the 1280x720 screenshot space.
-- For clicking UI elements, use capture_screen first to see the screen, then computer_action to click the target.
-- For typing: click the input field first (computer_action click), then type (computer_action type).
-- Stop acting when the goal is achieved or after 10 steps.
+- STRICT RULE: After EVERY computer_action, you MUST call capture_screen immediately. No exceptions. You cannot claim a task is done without seeing the screen first.
+- Workflow for any computer task: capture_screen → see UI → computer_action → capture_screen → verify → repeat until done.
+- Coordinates are in 1280x720 screenshot space. Look at the screenshot carefully to find the exact pixel position of UI elements before clicking.
+- For typing: click the input field first, then type.
+- Stop when capture_screen confirms the goal is achieved. Max 15 steps.
 - Keep spoken responses short — one or two sentences max.`;
 
 const TOOLS = [{
@@ -352,12 +351,10 @@ class GeminiLive {
       } else if (name === 'computer_action') {
         this.callbacks.onTranscript(`Action: ${args.action}${args.text ? ` "${args.text}"` : ''}…`);
         result = await window.electronAPI.computerAction(args);
-        // Send tool result with explicit instruction to verify via screenshot
         this._sendToolResponse(id, name, {
           success: result.success,
-          output: `${result.output}. Screenshot of the current screen is attached — look at it carefully, verify whether the task is complete, and if not, perform the next required action. Do NOT say the task is done unless you can see it is actually done in the screenshot.`,
+          output: `${result.output}. NOW call capture_screen to see what is on the screen and verify the result. You must not respond to the user until you have called capture_screen and confirmed visually.`,
         });
-        await this._sendAutoScreenshot();
         return;
       } else {
         result = { success: false, output: `Unknown tool: ${name}` };
@@ -399,17 +396,6 @@ class GeminiLive {
         },
       }));
     }
-  }
-
-  async _sendAutoScreenshot() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const b64 = await window.electronAPI.takeScreenshot();
-    if (!b64) return;
-    this.ws.send(JSON.stringify({
-      realtimeInput: {
-        video: { mimeType: 'image/jpeg', data: b64 },
-      },
-    }));
   }
 
   sendText(text) {
