@@ -4,24 +4,26 @@ const MODEL = 'models/gemini-3.1-flash-live-preview';
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 
-const SYSTEM_PROMPT = `You are a powerful Windows desktop AI assistant (like a smarter Siri). You can control the computer using tools.
+const SYSTEM_PROMPT = `You are a powerful Windows desktop AI assistant. You can control the computer using tools.
 
 CAPABILITIES:
 - open_application: Open any app (WhatsApp, Chrome, Spotify, VS Code, Notepad, Settings, etc.)
-- run_command: Execute PowerShell for anything else — set volume, brightness, manage files, get weather, create files, control media, search files, manage processes, send emails via Outlook, etc.
-- search_web: Open a Google search or specific URL in the browser
+- run_command: Execute PowerShell for any Windows automation task
+- search_web: Open a web search or URL in the browser
 - show_notification: Show a Windows toast notification
-- get_system_info: Get time/date, battery, memory, disk, running processes, IP, clipboard
-- capture_screen: See what's on the user's screen
-- computer_action: Click, type, scroll, or press keys on screen. After each action you automatically get a fresh screenshot so you can decide the next step.
+- get_system_info: Get time/date, battery, memory, disk, processes, IP, clipboard
+- capture_screen: See what's on the user's screen right now
+- computer_action: Click, type, scroll, or press keys. The tool response includes a REAL visual verification from a separate AI that actually looked at the screenshot — trust that description, it is ground truth.
 
-AUTONOMOUS MULTI-STEP BEHAVIOR:
-- Every computer_action automatically captures a fresh screenshot of the result and sends it to you BEFORE the tool response arrives. This means you will always see the current screen state as part of the tool result — use it.
-- Workflow: capture_screen to find coordinates → computer_action (screenshot auto-attached) → decide next step from what you see → repeat until goal is visually confirmed in the screenshot.
-- Coordinates are 1280x720. Examine the screenshot carefully to find exact pixel positions of buttons, inputs, and links.
-- For typing: click the input field first, then use action=type.
-- NEVER say a task is complete unless the screenshot you just received visually confirms it. If you cannot see confirmation, take another action.
-- Max 15 steps. Keep spoken responses short.`;
+TASK PLANNING:
+- For any multi-step task, first say your plan out loud as numbered steps before doing anything. Example: "I will: 1. Open Chrome, 2. Click address bar, 3. Type the URL, 4. Press Enter."
+- Execute each step one at a time.
+
+VERIFICATION:
+- After each computer_action, the tool response contains "Visual verification:" — this is a real description of what is actually on the screen right now from an AI that looked at the screenshot. Read it carefully.
+- Use the verification text to decide if the step succeeded or if you need to retry or adjust coordinates.
+- Only tell the user a task is done when the verification confirms it visually.
+- Max 15 steps per task.`;
 
 const TOOLS = [{
   functionDeclarations: [
@@ -349,24 +351,20 @@ class GeminiLive {
       } else if (name === 'get_system_info') {
         result = await window.electronAPI.getSystemInfo(args.type);
       } else if (name === 'computer_action') {
-        this.callbacks.onTranscript(`Action: ${args.action}${args.text ? ` "${args.text}"` : ''}…`);
+        this.callbacks.onTranscript(`→ ${args.action}${args.text ? ` "${args.text}"` : ''}${args.x != null ? ` (${args.x},${args.y})` : ''}`);
         result = await window.electronAPI.computerAction(args);
 
-        // Take clean screenshot (overlay hidden) so Gemini sees the real screen
+        // Take clean screenshot (overlay hidden) then verify via separate REST vision call
         const b64 = await window.electronAPI.takeScreenshotClean();
-
-        // Send screenshot BEFORE toolResponse — it lands in model context first
-        // so when the model reads the tool result it already has the visual
-        if (b64 && this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({
-            realtimeInput: { video: { mimeType: 'image/jpeg', data: b64 } },
-          }));
-          await new Promise(r => setTimeout(r, 150));
+        let verification = 'Screenshot unavailable.';
+        if (b64) {
+          verification = await this._verifyActionWithVision(b64, args);
+          this.callbacks.onTranscript(`✓ ${verification}`);
         }
 
         this._sendToolResponse(id, name, {
           success: result.success,
-          output: `${result.output}. The screenshot you just received in the video frame shows the current screen. Analyze it — is the task visually complete? If not, perform the next action.`,
+          output: `Action result: ${result.output}\nVisual verification: ${verification}\nBased on this, decide if the task step succeeded or if you need to take another action.`,
         });
         return;
       } else {
@@ -394,6 +392,43 @@ class GeminiLive {
         }],
       },
     }));
+  }
+
+  async _verifyActionWithVision(b64, args) {
+    const desc = args.action === 'type'
+      ? `typed the text "${args.text}"`
+      : args.action === 'key'
+      ? `pressed key "${args.key}"`
+      : args.action === 'click'
+      ? `left-clicked at screen position (${args.x}, ${args.y}) out of 1280x720`
+      : args.action === 'double_click'
+      ? `double-clicked at (${args.x}, ${args.y})`
+      : args.action === 'right_click'
+      ? `right-clicked at (${args.x}, ${args.y})`
+      : `${args.action} at (${args.x ?? ''}, ${args.y ?? ''})`;
+
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { inlineData: { mimeType: 'image/jpeg', data: b64 } },
+                { text: `I just performed this action on a Windows PC: "${desc}". Look at this screenshot and in 2 sentences: (1) describe exactly what is visible on screen right now, (2) state whether the action succeeded or not and why.` },
+              ],
+            }],
+            generationConfig: { maxOutputTokens: 150 },
+          }),
+        }
+      );
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? 'No response from vision check.';
+    } catch (e) {
+      return `Vision check failed: ${e.message}`;
+    }
   }
 
   async _toolCaptureScreen(callId) {
