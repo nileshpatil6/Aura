@@ -7,4 +7,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resizeExpanded: () => ipcRenderer.send('resize-expanded'),
   resizeCollapsed: () => ipcRenderer.send('resize-collapsed'),
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
+  runPowerShell: (cmd) => ipcRenderer.invoke('run-powershell', cmd),
+  openApp: (name, url) => ipcRenderer.invoke('open-app', name, url),
+  searchWeb: (query) => ipcRenderer.invoke('search-web', query),
+  showNotification: (title, msg) => ipcRenderer.invoke('show-notification', title, msg),
+  getSystemInfo: (type) => ipcRenderer.invoke('get-system-info', type),
 });

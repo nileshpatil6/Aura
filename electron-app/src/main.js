@@ -1,5 +1,6 @@
 const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
+const automation = require('./automation');
 
 let mainWindow = null;
 let tray = null;
@@ -146,3 +147,9 @@ ipcMain.handle('take-screenshot', async () => {
   if (!sources.length) return null;
   return sources[0].thumbnail.toJPEG(80).toString('base64');
 });
+
+ipcMain.handle('run-powershell', (_e, command) => automation.runPowerShell(command));
+ipcMain.handle('open-app', (_e, name, url) => automation.openApp(name, url));
+ipcMain.handle('search-web', (_e, query) => automation.searchWeb(query));
+ipcMain.handle('show-notification', (_e, title, message) => automation.showNotification(title, message));
+ipcMain.handle('get-system-info', (_e, type) => automation.getSystemInfo(type));
