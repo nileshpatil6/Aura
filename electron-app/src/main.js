@@ -52,7 +52,7 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-function createTray() {
+function createTray(shortcutLabel) {
   const iconPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
   let trayIcon;
   try {
@@ -63,10 +63,10 @@ function createTray() {
   }
 
   tray = new Tray(trayIcon);
-  tray.setToolTip('Gemini Assistant');
+  tray.setToolTip(`Gemini Assistant (${shortcutLabel})`);
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: 'Toggle (Ctrl+Space)', click: () => toggleAssistant() },
+    { label: `Toggle (${shortcutLabel})`, click: () => toggleAssistant() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
@@ -101,9 +101,19 @@ function collapseWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-  createTray();
 
-  globalShortcut.register('Control+Space', () => toggleAssistant());
+  const shortcuts = ['Alt+Space', 'Control+Shift+Space', 'Control+Space'];
+  let registered = false;
+  for (const sc of shortcuts) {
+    if (globalShortcut.register(sc, () => toggleAssistant())) {
+      console.log('Shortcut registered:', sc);
+      registered = sc;
+      break;
+    }
+  }
+  if (!registered) console.error('Failed to register any shortcut');
+
+  createTray(registered || 'click tray icon');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
