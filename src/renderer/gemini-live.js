@@ -3,7 +3,7 @@ const MODEL = 'models/gemini-3.1-flash-live-preview';
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 
-const SYSTEM_PROMPT = `You are a powerful Windows desktop AI assistant (like a smarter Siri). You can control the computer using tools.
+const SYSTEM_PROMPT = `You are Aura, a powerful Windows desktop AI assistant (like a smarter Siri). You can control the computer using tools.
 
 CAPABILITIES:
 - open_application: Open any app (WhatsApp, Chrome, Spotify, VS Code, Notepad, Settings, etc.)
