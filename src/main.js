@@ -1,6 +1,7 @@
 const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer } = require('electron');
 const path = require('path');
 const automation = require('./automation');
+const store = require('./store');
 
 let mainWindow = null;
 let tray = null;
@@ -158,6 +159,13 @@ ipcMain.handle('open-app', (_e, name, url) => automation.openApp(name, url));
 ipcMain.handle('search-web', (_e, query) => automation.searchWeb(query));
 ipcMain.handle('show-notification', (_e, title, message) => automation.showNotification(title, message));
 ipcMain.handle('get-system-info', (_e, type) => automation.getSystemInfo(type));
+
+// Store IPC
+ipcMain.handle('store-get',    (_e, bucket, key)        => store.get(bucket, key));
+ipcMain.handle('store-set',    (_e, bucket, key, value) => store.set(bucket, key, value));
+ipcMain.handle('store-push',   (_e, bucket, item)       => store.push(bucket, item));
+ipcMain.handle('store-remove', (_e, bucket, id)         => store.remove(bucket, id));
+ipcMain.handle('store-clear',  (_e, bucket)             => store.clear(bucket));
 
 ipcMain.handle('computer-action', (_e, params) => {
   const display = screen.getPrimaryDisplay();
