@@ -26,6 +26,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSystemInfo:   (type)        => ipcRenderer.invoke('get-system-info', type),
   computerAction:  (params)      => ipcRenderer.invoke('computer-action', params),
 
+  // Extended automation
+  readClipboard:  ()      => ipcRenderer.invoke('read-clipboard'),
+  writeClipboard: (t)     => ipcRenderer.invoke('write-clipboard', t),
+  mediaControl:   (a)     => ipcRenderer.invoke('media-control', a),
+  setVolume:      (p)     => ipcRenderer.invoke('set-volume', p),
+  setBrightness:  (p)     => ipcRenderer.invoke('set-brightness', p),
+  focusWindow:    (n)     => ipcRenderer.invoke('focus-window', n),
+  minimizeAll:    ()      => ipcRenderer.invoke('minimize-all'),
+  closeApp:       (n)     => ipcRenderer.invoke('close-app', n),
+  lockScreen:     ()      => ipcRenderer.invoke('lock-screen'),
+  sleepPc:        ()      => ipcRenderer.invoke('sleep-pc'),
+
   // Persistent store
   storeGet:    (bucket, key)        => ipcRenderer.invoke('store-get', bucket, key),
   storeSet:    (bucket, key, value) => ipcRenderer.invoke('store-set', bucket, key, value),

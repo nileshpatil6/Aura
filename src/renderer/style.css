@@ -537,6 +537,38 @@ body {
   padding: 5px 9px;
 }
 
+/* Quick action chips in pill panel */
+.chip-row {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  padding: 2px 0 4px;
+  position: relative;
+  z-index: 1;
+}
+.chip {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.7);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s;
+  -webkit-app-region: no-drag;
+}
+.chip:hover {
+  background: rgba(139,92,246,0.18);
+  border-color: rgba(139,92,246,0.45);
+  transform: scale(1.08);
+  color: white;
+}
+.chip:active { transform: scale(0.94); }
+
 /* ══════════════════════════════════════════════
    SETTINGS OVERLAY
 ══════════════════════════════════════════════ */

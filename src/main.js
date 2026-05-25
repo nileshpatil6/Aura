@@ -197,6 +197,18 @@ ipcMain.handle('search-web', (_e, query) => automation.searchWeb(query));
 ipcMain.handle('show-notification', (_e, title, message) => automation.showNotification(title, message));
 ipcMain.handle('get-system-info', (_e, type) => automation.getSystemInfo(type));
 
+// Power & media IPC
+ipcMain.handle('read-clipboard',  () => automation.readClipboard());
+ipcMain.handle('write-clipboard', (_e, t) => automation.writeClipboard(t));
+ipcMain.handle('media-control',   (_e, a) => automation.mediaControl(a));
+ipcMain.handle('set-volume',      (_e, p) => automation.setVolume(p));
+ipcMain.handle('set-brightness',  (_e, p) => automation.setBrightness(p));
+ipcMain.handle('focus-window',    (_e, n) => automation.focusWindow(n));
+ipcMain.handle('minimize-all',    () => automation.minimizeAll());
+ipcMain.handle('close-app',       (_e, n) => automation.closeApp(n));
+ipcMain.handle('lock-screen',     () => automation.lockScreen());
+ipcMain.handle('sleep-pc',        () => automation.sleepPc());
+
 // Store IPC
 ipcMain.handle('store-get',    (_e, bucket, key)        => store.get(bucket, key));
 ipcMain.handle('store-set',    (_e, bucket, key, value) => store.set(bucket, key, value));

@@ -14,6 +14,12 @@ CAPABILITIES:
 - capture_screen: See what's on the user's screen
 - do_computer_task: For ANY UI interaction (clicking, typing into fields, scrolling, navigating). Pass a clear goal in plain English; a precision vision specialist handles the actual pixel clicks reliably. Always prefer this over guessing coordinates yourself.
 - press_key: Press a single key or hotkey instantly (no vision needed). Use for hotkeys only.
+- clipboard: Read or write the clipboard. Use when user says "copy that", "what's in my clipboard", "paste this".
+- media_control: play_pause/next/prev/stop for Spotify, YouTube etc.
+- set_volume / set_brightness: numeric control with feedback
+- window_action: focus/minimize_all/close a window by name
+- power_action: lock or sleep the PC
+- run_macro: execute a saved macro by name (user defined these in the dashboard)
 
 WHEN TO USE TOOLS vs ANSWER DIRECTLY:
 - Answer directly from your knowledge for: general questions, explanations, definitions, math, coding help, advice, history, science, language, recommendations, and anything you already know. Do NOT call any tool for these.
@@ -136,6 +142,77 @@ const TOOLS = [{
         required: ['key'],
       },
     },
+    {
+      name: 'clipboard',
+      description: 'Read or write the system clipboard.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          op:   { type: 'STRING', description: 'read or write' },
+          text: { type: 'STRING', description: 'Text to write (for op=write)' },
+        },
+        required: ['op'],
+      },
+    },
+    {
+      name: 'media_control',
+      description: 'Control media playback for Spotify, YouTube, etc. via global media keys.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          action: { type: 'STRING', description: 'play_pause, next, prev, stop, vol_up, vol_down, mute' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'set_volume',
+      description: 'Set system volume to a specific percentage (0-100).',
+      parameters: {
+        type: 'OBJECT',
+        properties: { percent: { type: 'NUMBER', description: '0 to 100' } },
+        required: ['percent'],
+      },
+    },
+    {
+      name: 'set_brightness',
+      description: 'Set display brightness to a percentage (0-100). Laptops only.',
+      parameters: {
+        type: 'OBJECT',
+        properties: { percent: { type: 'NUMBER', description: '0 to 100' } },
+        required: ['percent'],
+      },
+    },
+    {
+      name: 'window_action',
+      description: 'Focus a window by app name, minimize everything, or close an app.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          action: { type: 'STRING', description: 'focus, minimize_all, close' },
+          name:   { type: 'STRING', description: 'App name for focus/close (e.g. "chrome", "spotify")' },
+        },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'power_action',
+      description: 'Lock the screen or put the PC to sleep.',
+      parameters: {
+        type: 'OBJECT',
+        properties: { action: { type: 'STRING', description: 'lock, sleep' } },
+        required: ['action'],
+      },
+    },
+    {
+      name: 'run_macro',
+      description: 'Run a saved macro by name. Macros are user-defined automation goals from the dashboard.',
+      parameters: {
+        type: 'OBJECT',
+        properties: { name: { type: 'STRING', description: 'Macro name as shown in the dashboard.' } },
+        required: ['name'],
+      },
+    },
   ],
 }];
 
@@ -254,6 +331,22 @@ class GeminiLive {
     const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
     this.ws = ws;
 
+    // Compose personalized system prompt with memory + recent context
+    let personalPrompt = SYSTEM_PROMPT;
+    try {
+      const mem = await window.electronAPI?.storeGet('memory') || {};
+      const macros = await window.electronAPI?.storeGet('automations') || [];
+      const recent = (await window.electronAPI?.storeGet('history') || []).slice(-6);
+      const extra = [];
+      if (mem.name) extra.push(`USER'S NAME: ${mem.name} — call them by this when natural.`);
+      if (mem.notes?.length) extra.push(`USER NOTES:\n${mem.notes.join('\n')}`);
+      if (macros.length) extra.push(`SAVED MACROS (callable via run_macro): ${macros.map(m => `"${m.name}" — ${m.goal}`).join(' | ')}`);
+      if (recent.length) {
+        extra.push('RECENT CONVERSATION (for context):\n' + recent.map(m => `${m.role}: ${m.text}`).join('\n'));
+      }
+      if (extra.length) personalPrompt += '\n\n' + extra.join('\n\n');
+    } catch {}
+
     ws.onopen = () => {
       console.log('WS open, sending setup...');
       ws.send(JSON.stringify({
@@ -268,7 +361,7 @@ class GeminiLive {
             },
           },
           systemInstruction: {
-            parts: [{ text: SYSTEM_PROMPT }],
+            parts: [{ text: personalPrompt }],
           },
           tools: TOOLS,
         },
@@ -396,6 +489,43 @@ class GeminiLive {
       } else if (name === 'press_key') {
         this.callbacks.onTranscript(`Pressing ${args.key}…`);
         result = await window.electronAPI.computerAction({ action: 'key', key: args.key });
+      } else if (name === 'clipboard') {
+        if (args.op === 'read') {
+          result = await window.electronAPI.readClipboard();
+        } else if (args.op === 'write') {
+          result = await window.electronAPI.writeClipboard(args.text || '');
+        } else {
+          result = { success: false, output: 'unknown clipboard op' };
+        }
+      } else if (name === 'media_control') {
+        this.callbacks.onTranscript(`Media: ${args.action}…`);
+        result = await window.electronAPI.mediaControl(args.action);
+      } else if (name === 'set_volume') {
+        this.callbacks.onTranscript(`Volume → ${args.percent}%`);
+        result = await window.electronAPI.setVolume(args.percent);
+      } else if (name === 'set_brightness') {
+        this.callbacks.onTranscript(`Brightness → ${args.percent}%`);
+        result = await window.electronAPI.setBrightness(args.percent);
+      } else if (name === 'window_action') {
+        if (args.action === 'focus')        result = await window.electronAPI.focusWindow(args.name);
+        else if (args.action === 'minimize_all') result = await window.electronAPI.minimizeAll();
+        else if (args.action === 'close')   result = await window.electronAPI.closeApp(args.name);
+        else result = { success: false, output: 'unknown window action' };
+      } else if (name === 'power_action') {
+        if (args.action === 'lock')  result = await window.electronAPI.lockScreen();
+        else if (args.action === 'sleep') result = await window.electronAPI.sleepPc();
+        else result = { success: false, output: 'unknown power action' };
+      } else if (name === 'run_macro') {
+        const macros = await window.electronAPI.storeGet('automations') || [];
+        const m = macros.find(x => x.name?.toLowerCase() === (args.name || '').toLowerCase());
+        if (!m) {
+          result = { success: false, output: `No macro named "${args.name}"` };
+        } else {
+          this.callbacks.onTranscript(`Running macro: ${m.name}…`);
+          // Re-dispatch as do_computer_task with the macro's goal
+          await this._dispatchTool({ id, name: 'do_computer_task', args: { goal: m.goal } });
+          return;
+        }
       } else {
         result = { success: false, output: `Unknown tool: ${name}` };
       }

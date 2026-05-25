@@ -327,4 +327,80 @@ async function computerAction(params) {
   return result;
 }
 
-module.exports = { runPowerShell, openApp, searchWeb, showNotification, getSystemInfo, computerAction };
+// ── Clipboard ────────────────────────────────────────────────────────────────
+async function readClipboard() {
+  return runPowerShell('Get-Clipboard');
+}
+async function writeClipboard(text) {
+  const escaped = (text || '').replace(/'/g, "''");
+  return runPowerShell(`Set-Clipboard -Value '${escaped}'`);
+}
+
+// ── Media (system media keys via VK codes) ───────────────────────────────────
+async function mediaControl(action) {
+  // 0xB3 PLAY_PAUSE, 0xB2 STOP, 0xB0 NEXT, 0xB1 PREV, 0xAE VOL_DOWN, 0xAF VOL_UP, 0xAD VOL_MUTE
+  const map = { play_pause:0xB3, stop:0xB2, next:0xB0, prev:0xB1, vol_up:0xAF, vol_down:0xAE, mute:0xAD };
+  const code = map[action];
+  if (!code) return { success: false, output: `unknown media action: ${action}` };
+  const script = `${WIN32_BLOCK}
+[Win32Input]::keybd_event(${code}, 0, 0, 0)
+Start-Sleep -Milliseconds 60
+[Win32Input]::keybd_event(${code}, 0, 2, 0)
+Write-Output "media ${action}"`;
+  return runPowerShell(script);
+}
+
+// ── Volume (precise, 0-100) ──────────────────────────────────────────────────
+async function setVolume(percent) {
+  const p = Math.max(0, Math.min(100, parseInt(percent, 10) || 0));
+  // Use NirCmd-style approach via Set-AudioDevice not always available; use VK key spam
+  const script = `${WIN32_BLOCK}
+$obj = New-Object -ComObject WScript.Shell
+1..50 | ForEach-Object { [Win32Input]::keybd_event(0xAE, 0, 0, 0); [Win32Input]::keybd_event(0xAE, 0, 2, 0) }
+$target = ${p / 2}
+1..[int]$target | ForEach-Object { [Win32Input]::keybd_event(0xAF, 0, 0, 0); [Win32Input]::keybd_event(0xAF, 0, 2, 0) }
+Write-Output "volume set to ~${p}%"`;
+  return runPowerShell(script);
+}
+
+// ── Brightness ───────────────────────────────────────────────────────────────
+async function setBrightness(percent) {
+  const p = Math.max(0, Math.min(100, parseInt(percent, 10) || 50));
+  return runPowerShell(`(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1, ${p}); Write-Output "brightness ${p}%"`);
+}
+
+// ── Window management ────────────────────────────────────────────────────────
+async function focusWindow(appName) {
+  const safe = (appName || '').replace(/'/g, "''");
+  return runPowerShell(`
+$proc = Get-Process | Where-Object { $_.MainWindowTitle -like '*${safe}*' -or $_.ProcessName -like '*${safe}*' } | Select-Object -First 1
+if ($proc) {
+  $sig = '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);'
+  $type = Add-Type -MemberDefinition $sig -Name W -Namespace S -PassThru
+  $type::SetForegroundWindow($proc.MainWindowHandle)
+  Write-Output "focused $($proc.ProcessName)"
+} else {
+  Write-Output "no window matching '${safe}'"
+}`.trim());
+}
+
+async function minimizeAll() {
+  return runPowerShell(`(New-Object -ComObject Shell.Application).MinimizeAll(); Write-Output "minimized all"`);
+}
+
+async function closeApp(appName) {
+  const safe = (appName || '').replace(/'/g, "''");
+  return runPowerShell(`Get-Process | Where-Object { $_.ProcessName -like '*${safe}*' } | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Output "closed ${safe}"`);
+}
+
+// ── Power ────────────────────────────────────────────────────────────────────
+async function lockScreen()  { return runPowerShell('rundll32.exe user32.dll,LockWorkStation; Write-Output "locked"'); }
+async function sleepPc()     { return runPowerShell('Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::SetSuspendState("Suspend", $false, $true); Write-Output "sleeping"'); }
+
+module.exports = {
+  runPowerShell, openApp, searchWeb, showNotification, getSystemInfo, computerAction,
+  readClipboard, writeClipboard,
+  mediaControl, setVolume, setBrightness,
+  focusWindow, minimizeAll, closeApp,
+  lockScreen, sleepPc,
+};

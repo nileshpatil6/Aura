@@ -167,6 +167,33 @@ async function saveSettings() {
 // Settings button now opens the full dashboard
 settingsBtn.addEventListener('click', () => window.electronAPI?.openDashboard());
 
+// Dashboard button
+const dashboardBtn = document.getElementById('dashboard-btn');
+dashboardBtn?.addEventListener('click', () => window.electronAPI?.openDashboard());
+
+// Quick-action chips
+document.querySelectorAll('.chip').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const a = btn.dataset.quick;
+    const api = window.electronAPI;
+    try {
+      if (a === 'play_pause') await api.mediaControl('play_pause');
+      else if (a === 'next')  await api.mediaControl('next');
+      else if (a === 'mute')  await api.mediaControl('mute');
+      else if (a === 'clipboard') {
+        const r = await api.readClipboard();
+        appendTranscript(`Clipboard: ${(r.output || '').slice(0, 200)}\n`);
+      }
+      else if (a === 'minimize') await api.minimizeAll();
+      else if (a === 'lock')     await api.lockScreen();
+      btn.style.background = 'rgba(52, 211, 153, 0.35)';
+      setTimeout(() => { btn.style.background = ''; }, 280);
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+});
+
 // Legacy overlay still available as fallback for first-run / no-key situations
 const _origOpenSettings = openSettings;
 settingsCancel.addEventListener('click', closeSettings);
