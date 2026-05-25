@@ -4,6 +4,7 @@ const automation = require('./automation');
 const store = require('./store');
 
 let mainWindow = null;
+let dashboardWindow = null;
 let tray = null;
 let isVisible = false;
 
@@ -53,6 +54,33 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
+function createDashboard() {
+  if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+    dashboardWindow.focus();
+    return;
+  }
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  dashboardWindow = new BrowserWindow({
+    width: Math.min(1280, width - 80),
+    height: Math.min(820, height - 80),
+    minWidth: 1000,
+    minHeight: 640,
+    frame: false,
+    show: false,
+    backgroundColor: '#050811',
+    title: 'Aura · Command Center',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: false,
+    },
+  });
+  dashboardWindow.loadFile(path.join(__dirname, 'renderer', 'dashboard.html'));
+  dashboardWindow.once('ready-to-show', () => dashboardWindow.show());
+  dashboardWindow.on('closed', () => { dashboardWindow = null; });
+}
+
 function createTray(shortcutLabel) {
   const iconPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
   let trayIcon;
@@ -67,7 +95,8 @@ function createTray(shortcutLabel) {
   tray.setToolTip(`Aura (${shortcutLabel})`);
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: `Toggle (${shortcutLabel})`, click: () => toggleAssistant() },
+    { label: `Toggle Aura (${shortcutLabel})`, click: () => toggleAssistant() },
+    { label: 'Open Command Center', click: () => createDashboard() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
@@ -127,6 +156,14 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 ipcMain.on('collapse', () => { collapseWindow(); isVisible = false; });
 ipcMain.on('resize-expanded', () => expandWindow());
 ipcMain.on('resize-collapsed', () => collapseWindow());
+
+ipcMain.on('open-dashboard',  () => createDashboard());
+ipcMain.on('close-dashboard', () => dashboardWindow && dashboardWindow.close());
+ipcMain.handle('minimize-dashboard', () => dashboardWindow && dashboardWindow.minimize());
+ipcMain.handle('maximize-dashboard', () => {
+  if (!dashboardWindow) return;
+  dashboardWindow.isMaximized() ? dashboardWindow.unmaximize() : dashboardWindow.maximize();
+});
 
 // Toggle click-through: transparent areas pass clicks to windows below
 ipcMain.on('set-ignore-mouse', (_e, ignore) => {

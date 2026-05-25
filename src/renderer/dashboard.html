@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' wss: https: data: blob: fonts.googleapis.com fonts.gstatic.com;" />
+<title>Aura · Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@500;700;900&display=swap">
+<link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <!-- Animated background -->
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+  <div class="scanlines"></div>
+
+  <!-- Custom titlebar -->
+  <header class="titlebar">
+    <div class="brand">
+      <div class="brand-orb"></div>
+      <div class="brand-text">
+        <div class="brand-name">AURA</div>
+        <div class="brand-sub">command center · v1.0</div>
+      </div>
+    </div>
+    <div class="status-row">
+      <div class="status-pill" id="status-pill">
+        <span class="status-dot"></span>
+        <span id="status-label">INITIALIZING</span>
+      </div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
+    <div class="window-controls">
+      <button class="wc-btn" id="min-btn" title="Minimize">─</button>
+      <button class="wc-btn" id="max-btn" title="Maximize">▢</button>
+      <button class="wc-btn wc-close" id="close-btn" title="Close">✕</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <nav class="nav">
+        <button class="nav-item active" data-tab="chat">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+          <span>Chat</span>
+        </button>
+        <button class="nav-item" data-tab="activity">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M13 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7V3zm7.94 7H22a10 10 0 0 0-8-8v2.06A8.01 8.01 0 0 1 19.94 10z"/></svg>
+          <span>Activity</span>
+        </button>
+        <button class="nav-item" data-tab="system">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
+          <span>System</span>
+        </button>
+        <button class="nav-item" data-tab="macros">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z"/></svg>
+          <span>Macros</span>
+        </button>
+        <button class="nav-item" data-tab="memory">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2A10 10 0 1 0 22 12 10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm1-13h-2v6h6v-2h-4z"/></svg>
+          <span>Memory</span>
+        </button>
+        <button class="nav-item" data-tab="settings">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 15.6 12 3.6 3.6 0 0 1 12 15.6z"/></svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="stat-row"><span class="stat-key">CPU</span><span class="stat-val" id="mini-cpu">--%</span></div>
+        <div class="stat-row"><span class="stat-key">RAM</span><span class="stat-val" id="mini-ram">--%</span></div>
+        <div class="stat-row"><span class="stat-key">NET</span><span class="stat-val" id="mini-net">--</span></div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <!-- CHAT TAB -->
+      <section class="tab tab-chat active" data-tab="chat">
+        <div class="panel-head">
+          <h1>Conversation</h1>
+          <div class="head-actions">
+            <input id="chat-search" placeholder="Search history…" />
+            <button id="new-chat-btn" class="btn-primary">+ New chat</button>
+          </div>
+        </div>
+        <div class="chat-list" id="chat-list"></div>
+        <div class="chat-input-row">
+          <textarea id="chat-input" placeholder="Ask Aura anything…  ↵ to send  ⇧↵ for newline" rows="1"></textarea>
+          <button class="send-btn" id="chat-send">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
+          </button>
+        </div>
+      </section>
+
+      <!-- ACTIVITY TAB -->
+      <section class="tab tab-activity" data-tab="activity">
+        <div class="panel-head">
+          <h1>Activity Log</h1>
+          <div class="head-actions">
+            <select id="activity-filter">
+              <option value="all">All actions</option>
+              <option value="command">Commands</option>
+              <option value="click">UI Actions</option>
+              <option value="system">System</option>
+            </select>
+            <button id="activity-clear" class="btn-ghost">Clear log</button>
+          </div>
+        </div>
+        <div class="activity-feed" id="activity-feed"></div>
+      </section>
+
+      <!-- SYSTEM TAB -->
+      <section class="tab tab-system" data-tab="system">
+        <div class="panel-head">
+          <h1>System Monitor</h1>
+          <div class="head-actions"><span class="live-dot"></span> LIVE</div>
+        </div>
+        <div class="system-grid">
+          <div class="sys-card sys-card-wide">
+            <div class="sys-card-h">CPU UTILIZATION</div>
+            <canvas id="cpu-graph" width="600" height="120"></canvas>
+            <div class="sys-card-v" id="cpu-val">--%</div>
+          </div>
+          <div class="sys-card">
+            <div class="sys-card-h">MEMORY</div>
+            <div class="ring-wrap"><svg viewBox="0 0 100 100" class="ring"><circle cx="50" cy="50" r="42" class="ring-bg"/><circle cx="50" cy="50" r="42" class="ring-fg" id="ram-ring"/></svg><div class="ring-val" id="ram-val">--%</div></div>
+            <div class="sys-card-sub" id="ram-sub">--</div>
+          </div>
+          <div class="sys-card">
+            <div class="sys-card-h">DISK</div>
+            <div class="disk-list" id="disk-list"></div>
+          </div>
+          <div class="sys-card">
+            <div class="sys-card-h">BATTERY</div>
+            <div class="big-val" id="battery-val">--</div>
+            <div class="sys-card-sub" id="battery-sub">--</div>
+          </div>
+          <div class="sys-card">
+            <div class="sys-card-h">NETWORK</div>
+            <div class="big-val" id="wifi-val">--</div>
+            <div class="sys-card-sub" id="wifi-sub">--</div>
+          </div>
+          <div class="sys-card sys-card-wide">
+            <div class="sys-card-h">TOP PROCESSES</div>
+            <div class="proc-list" id="proc-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MACROS TAB -->
+      <section class="tab tab-macros" data-tab="macros">
+        <div class="panel-head">
+          <h1>Macros</h1>
+          <div class="head-actions">
+            <button id="macro-new" class="btn-primary">+ New macro</button>
+          </div>
+        </div>
+        <div class="macro-grid" id="macro-grid"></div>
+      </section>
+
+      <!-- MEMORY TAB -->
+      <section class="tab tab-memory" data-tab="memory">
+        <div class="panel-head">
+          <h1>Aura's Memory</h1>
+        </div>
+        <div class="mem-card">
+          <label>Your name</label>
+          <input id="mem-name" placeholder="What should Aura call you?" />
+        </div>
+        <div class="mem-card">
+          <label>Notes & preferences (Aura will recall these)</label>
+          <textarea id="mem-notes" rows="10" placeholder="e.g.  - I work in Pacific Time
+- Prefer concise replies
+- My main browser is Chrome
+- Code projects live in C:\dev"></textarea>
+          <button class="btn-primary" id="mem-save">Save memory</button>
+        </div>
+      </section>
+
+      <!-- SETTINGS TAB -->
+      <section class="tab tab-settings" data-tab="settings">
+        <div class="panel-head"><h1>Settings</h1></div>
+
+        <div class="settings-grid">
+          <div class="set-card">
+            <div class="set-card-h">API & MODELS</div>
+            <label>Gemini API Key</label>
+            <div class="row">
+              <input id="set-api-key" type="password" placeholder="AIza…" />
+              <button class="btn-ghost" id="toggle-key">👁</button>
+            </div>
+            <div class="hint">Get one at aistudio.google.com</div>
+          </div>
+
+          <div class="set-card">
+            <div class="set-card-h">VOICE</div>
+            <label>Voice</label>
+            <select id="set-voice">
+              <option value="Aoede">Aoede — warm female</option>
+              <option value="Puck">Puck — upbeat male</option>
+              <option value="Charon">Charon — deep male</option>
+              <option value="Kore">Kore — clear female</option>
+              <option value="Fenrir">Fenrir — energetic male</option>
+              <option value="Leda">Leda — calm female</option>
+              <option value="Orus">Orus — neutral male</option>
+              <option value="Zephyr">Zephyr — bright female</option>
+            </select>
+          </div>
+
+          <div class="set-card">
+            <div class="set-card-h">HOTKEY</div>
+            <label>Global shortcut</label>
+            <select id="set-hotkey">
+              <option value="Alt+Space">Alt + Space</option>
+              <option value="Control+Shift+Space">Ctrl + Shift + Space</option>
+              <option value="Control+Space">Ctrl + Space</option>
+              <option value="Control+Alt+A">Ctrl + Alt + A</option>
+            </select>
+            <div class="hint">Restart Aura after changing</div>
+          </div>
+
+          <div class="set-card">
+            <div class="set-card-h">BEHAVIOR</div>
+            <label class="check"><input type="checkbox" id="set-verbose" /> Verbose logging</label>
+            <label class="check"><input type="checkbox" id="set-autostart" /> Start with Windows</label>
+            <label class="check"><input type="checkbox" id="set-ptt" /> Push-to-talk mode</label>
+          </div>
+
+          <div class="set-card set-card-danger">
+            <div class="set-card-h">DANGER ZONE</div>
+            <button class="btn-danger" id="reset-history">Clear conversation history</button>
+            <button class="btn-danger" id="reset-activity">Clear activity log</button>
+            <button class="btn-danger" id="reset-all">Reset everything</button>
+          </div>
+
+          <div class="set-card">
+            <div class="set-card-h">ABOUT</div>
+            <div class="about-row"><span>App</span><span>Aura</span></div>
+            <div class="about-row"><span>Version</span><span>1.0.0</span></div>
+            <div class="about-row"><span>Live model</span><span>gemini-live-2.5-flash</span></div>
+            <div class="about-row"><span>Vision</span><span>gemini-2.5-computer-use</span></div>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button class="btn-primary" id="set-save">Save settings</button>
+          <span class="save-status" id="save-status"></span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

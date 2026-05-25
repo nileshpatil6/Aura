@@ -240,8 +240,15 @@ class GeminiLive {
 
   async connect() {
     if (this.connected) return;
-    const apiKey = localStorage.getItem('gemini_api_key') || '';
+    // Prefer electron-store (shared with dashboard), fall back to localStorage
+    let apiKey = '';
+    try { apiKey = await window.electronAPI?.storeGet('settings', 'apiKey') || ''; } catch {}
+    if (!apiKey) apiKey = localStorage.getItem('gemini_api_key') || '';
     if (!apiKey) throw new Error('NO_API_KEY');
+    // Pull voice preference too
+    let voice = 'Aoede';
+    try { voice = (await window.electronAPI?.storeGet('settings', 'voice')) || 'Aoede'; } catch {}
+    this._voice = voice;
     this.callbacks.onStateChange('listening');
 
     const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
@@ -256,7 +263,7 @@ class GeminiLive {
             responseModalities: ['AUDIO'],
             speechConfig: {
               voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: 'Aoede' },
+                prebuiltVoiceConfig: { voiceName: this._voice || 'Aoede' },
               },
             },
           },
@@ -340,6 +347,14 @@ class GeminiLive {
   async _dispatchTool(call) {
     const { id, name, args = {} } = call;
     console.log('Tool call:', name, args);
+    // Log activity
+    try {
+      const kind = (name === 'do_computer_task' || name === 'press_key') ? 'click'
+                 : (name === 'run_command') ? 'command'
+                 : 'system';
+      const summary = name + ': ' + JSON.stringify(args).slice(0, 140);
+      window.electronAPI?.storePush('activity', { kind, summary });
+    } catch {}
 
     try {
       let result;
@@ -441,6 +456,8 @@ class GeminiLive {
     }
     this.callbacks.onUserText(text);
     this.callbacks.onStateChange('thinking');
+    // Persist to history
+    try { window.electronAPI?.storePush('history', { role: 'user', text }); } catch {}
     this.ws.send(JSON.stringify({
       clientContent: {
         turns: [{ role: 'user', parts: [{ text }] }],

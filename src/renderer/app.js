@@ -139,6 +139,8 @@ async function saveSettings() {
   const key = apiKeyInput.value.trim();
   if (!key) return;
   localStorage.setItem('gemini_api_key', key);
+  // Mirror to electron-store so dashboard sees it
+  try { await window.electronAPI?.storeSet('settings', 'apiKey', key); } catch {}
   closeSettings();
   if (!isOpen) return;
   // Panel open but no gemini yet (first-run flow) — start fresh
@@ -162,7 +164,11 @@ async function saveSettings() {
   }
 }
 
-settingsBtn.addEventListener('click', openSettings);
+// Settings button now opens the full dashboard
+settingsBtn.addEventListener('click', () => window.electronAPI?.openDashboard());
+
+// Legacy overlay still available as fallback for first-run / no-key situations
+const _origOpenSettings = openSettings;
 settingsCancel.addEventListener('click', closeSettings);
 settingsSave.addEventListener('click', saveSettings);
 apiKeyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSettings(); });

@@ -9,8 +9,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resizeExpanded:  () => ipcRenderer.send('resize-expanded'),
   resizeCollapsed: () => ipcRenderer.send('resize-collapsed'),
   setIgnoreMouse:  (v) => ipcRenderer.send('set-ignore-mouse', v),
-  openDashboard:   () => ipcRenderer.send('open-dashboard'),
-  closeDashboard:  () => ipcRenderer.send('close-dashboard'),
+  openDashboard:     () => ipcRenderer.send('open-dashboard'),
+  closeDashboard:    () => ipcRenderer.send('close-dashboard'),
+  minimizeDashboard: () => ipcRenderer.invoke('minimize-dashboard'),
+  maximizeDashboard: () => ipcRenderer.invoke('maximize-dashboard'),
 
   // Screenshots
   takeScreenshot:      () => ipcRenderer.invoke('take-screenshot'),
