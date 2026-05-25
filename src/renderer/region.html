@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<title>Select region</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; cursor: crosshair; user-select: none; font-family: -apple-system, 'Segoe UI', sans-serif; }
+  body {
+    background: rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(2px);
+  }
+  .hint {
+    position: fixed;
+    top: 24px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(10, 14, 24, 0.92);
+    color: #00d9ff;
+    padding: 10px 20px;
+    border: 1px solid rgba(0, 217, 255, 0.4);
+    border-radius: 100px;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    box-shadow: 0 0 24px rgba(0, 217, 255, 0.3);
+    pointer-events: none;
+    z-index: 100;
+  }
+  .sel {
+    position: absolute;
+    border: 2px solid #00d9ff;
+    background: rgba(0, 217, 255, 0.08);
+    box-shadow:
+      0 0 20px rgba(0, 217, 255, 0.5),
+      inset 0 0 20px rgba(0, 217, 255, 0.1),
+      0 0 0 9999px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+  }
+  .sel::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+  }
+  .dim {
+    position: absolute;
+    top: -28px; left: 0;
+    background: #00d9ff;
+    color: #000;
+    padding: 2px 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+  <div class="hint">Drag to select a region · Esc to cancel</div>
+  <script>
+    const api = window.electronAPI;
+    let startX, startY;
+    let sel = null;
+    let dragging = false;
+
+    document.addEventListener('mousedown', (e) => {
+      dragging = true;
+      startX = e.clientX; startY = e.clientY;
+      sel = document.createElement('div');
+      sel.className = 'sel';
+      const dim = document.createElement('div');
+      dim.className = 'dim';
+      sel.appendChild(dim);
+      document.body.appendChild(sel);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging || !sel) return;
+      const x = Math.min(e.clientX, startX);
+      const y = Math.min(e.clientY, startY);
+      const w = Math.abs(e.clientX - startX);
+      const h = Math.abs(e.clientY - startY);
+      sel.style.left = x + 'px';
+      sel.style.top = y + 'px';
+      sel.style.width = w + 'px';
+      sel.style.height = h + 'px';
+      sel.querySelector('.dim').textContent = `${w} × ${h}`;
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (!dragging) return;
+      dragging = false;
+      const x = Math.min(e.clientX, startX);
+      const y = Math.min(e.clientY, startY);
+      const w = Math.abs(e.clientX - startX);
+      const h = Math.abs(e.clientY - startY);
+      if (w < 8 || h < 8) {
+        api.cancelRegion?.();
+        return;
+      }
+      api.captureRegion?.({ x, y, width: w, height: h });
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') api.cancelRegion?.();
+    });
+  </script>
+</body>
+</html>

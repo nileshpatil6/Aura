@@ -14,6 +14,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimizeDashboard: () => ipcRenderer.invoke('minimize-dashboard'),
   maximizeDashboard: () => ipcRenderer.invoke('maximize-dashboard'),
 
+  // Ask Anywhere / region / clips
+  closeAsk:       () => ipcRenderer.send('close-ask'),
+  closeClips:     () => ipcRenderer.send('close-clips'),
+  cancelRegion:   () => ipcRenderer.send('cancel-region'),
+  captureRegion:  (r) => ipcRenderer.send('capture-region', r),
+  onAskContext:   (cb) => ipcRenderer.on('ask-context', cb),
+
   // Screenshots
   takeScreenshot:      () => ipcRenderer.invoke('take-screenshot'),
   takeScreenshotClean: () => ipcRenderer.invoke('take-screenshot-clean'),

@@ -46,12 +46,14 @@ To change the key later: open Aura and click the ⚙ button in the footer.
 
 ## Usage
 
-| Action | How |
-|--------|-----|
-| Open Aura | `Alt+Space` (or `Ctrl+Shift+Space`) |
-| Close Aura | Click ✕ or press the shortcut again |
-| Voice input | Just speak after Aura opens |
-| Text input | Click the ⌨ button |
+| Action | Shortcut |
+|--------|----------|
+| Open Aura voice assistant | `Alt+Space` |
+| Ask Aura anything (Spotlight) | `Ctrl+Shift+A` |
+| Region screenshot → ask | `Ctrl+Shift+S` |
+| Ask about selected text | `Ctrl+Shift+E` |
+| Clipboard history | `Ctrl+Shift+V` |
+| Open Command Center | tray menu / pill ⚙ button |
 
 ### Example commands
 

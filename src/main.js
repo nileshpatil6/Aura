@@ -1,10 +1,13 @@
-const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer } = require('electron');
+const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer, clipboard } = require('electron');
 const path = require('path');
 const automation = require('./automation');
 const store = require('./store');
 
 let mainWindow = null;
 let dashboardWindow = null;
+let askWindow = null;
+let regionWindow = null;
+let clipsWindow = null;
 let tray = null;
 let isVisible = false;
 
@@ -81,6 +84,151 @@ function createDashboard() {
   dashboardWindow.on('closed', () => { dashboardWindow = null; });
 }
 
+// ───── Ask Anywhere ─────────────────────────────────────────────────────────
+function openAsk(context) {
+  if (askWindow && !askWindow.isDestroyed()) { askWindow.focus(); return; }
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  askWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    x: Math.floor((width - 800) / 2),
+    y: 80,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    show: false,
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: false,
+    },
+  });
+  askWindow.loadFile(path.join(__dirname, 'renderer', 'ask.html'));
+  askWindow.once('ready-to-show', () => {
+    askWindow.show();
+    askWindow.focus();
+    if (context) askWindow.webContents.send('ask-context', context);
+  });
+  askWindow.on('blur', () => askWindow && !askWindow.isDestroyed() && askWindow.close());
+  askWindow.on('closed', () => { askWindow = null; });
+}
+
+// ───── Region Screenshot ────────────────────────────────────────────────────
+function openRegionSelector() {
+  if (regionWindow && !regionWindow.isDestroyed()) return;
+  const displays = screen.getAllDisplays();
+  const primary = screen.getPrimaryDisplay();
+  regionWindow = new BrowserWindow({
+    x: primary.bounds.x,
+    y: primary.bounds.y,
+    width: primary.bounds.width,
+    height: primary.bounds.height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    fullscreen: false,
+    movable: false,
+    resizable: false,
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  regionWindow.setAlwaysOnTop(true, 'screen-saver');
+  regionWindow.loadFile(path.join(__dirname, 'renderer', 'region.html'));
+  regionWindow.on('closed', () => { regionWindow = null; });
+}
+
+async function captureRegion(rect) {
+  if (regionWindow && !regionWindow.isDestroyed()) regionWindow.close();
+  await new Promise(r => setTimeout(r, 220));
+  const primary = screen.getPrimaryDisplay();
+  const sf = primary.scaleFactor;
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: {
+      width: Math.round(primary.bounds.width * sf),
+      height: Math.round(primary.bounds.height * sf),
+    },
+  });
+  if (!sources.length) return;
+  const fullImg = sources[0].thumbnail;
+  // Crop the requested rect (rect coords are in logical pixels)
+  const cropped = fullImg.crop({
+    x: Math.round(rect.x * sf),
+    y: Math.round(rect.y * sf),
+    width: Math.round(rect.width * sf),
+    height: Math.round(rect.height * sf),
+  });
+  const b64 = cropped.toJPEG(85).toString('base64');
+  openAsk({ mode: 'image', imageB64: b64 });
+}
+
+// ───── Clipboard History ────────────────────────────────────────────────────
+function openClips() {
+  if (clipsWindow && !clipsWindow.isDestroyed()) { clipsWindow.focus(); return; }
+  const { width } = screen.getPrimaryDisplay().workAreaSize;
+  clipsWindow = new BrowserWindow({
+    width: 500,
+    height: 600,
+    x: Math.floor((width - 500) / 2),
+    y: 80,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    show: false,
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  clipsWindow.loadFile(path.join(__dirname, 'renderer', 'clips.html'));
+  clipsWindow.once('ready-to-show', () => { clipsWindow.show(); clipsWindow.focus(); });
+  clipsWindow.on('blur', () => clipsWindow && !clipsWindow.isDestroyed() && clipsWindow.close());
+  clipsWindow.on('closed', () => { clipsWindow = null; });
+}
+
+// Background clipboard monitor: capture text changes, store with AI labels (cheap heuristic)
+let lastClip = '';
+function startClipboardWatcher() {
+  setInterval(() => {
+    try {
+      const txt = clipboard.readText();
+      if (!txt || txt === lastClip || txt.length > 5000) return;
+      lastClip = txt;
+      const label = quickLabel(txt);
+      const clips = store.get('clipboard_history') || [];
+      // Dedupe with previous if same
+      if (clips.length && clips[clips.length - 1].text === txt) return;
+      clips.push({ ts: Date.now(), text: txt, label });
+      if (clips.length > 30) clips.splice(0, clips.length - 30);
+      store.set('clipboard_history', clips);
+    } catch {}
+  }, 1500);
+}
+function quickLabel(t) {
+  if (/^https?:\/\//.test(t)) return 'URL';
+  if (/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(t.trim())) return 'Email';
+  if (/^\+?[\d\s()-]{7,}$/.test(t.trim())) return 'Phone';
+  if (/^[\d.]+$/.test(t.trim())) return 'Number';
+  if (/^[A-Fa-f0-9]{6,8}$/.test(t.trim()) || /^#[A-Fa-f0-9]{3,8}$/.test(t.trim())) return 'Color';
+  if (t.split('\n').length > 3) return 'Multi-line text';
+  if (/(function|const|let|var|class|def |import |return)/.test(t) && t.length > 30) return 'Code';
+  if (t.length < 60) return 'Snippet';
+  return 'Text';
+}
+
 function createTray(shortcutLabel) {
   const iconPath = path.join(__dirname, '..', 'assets', 'tray-icon.png');
   let trayIcon;
@@ -96,6 +244,10 @@ function createTray(shortcutLabel) {
 
   const contextMenu = Menu.buildFromTemplate([
     { label: `Toggle Aura (${shortcutLabel})`, click: () => toggleAssistant() },
+    { label: 'Ask Aura (Ctrl+Shift+A)', click: () => openAsk() },
+    { label: 'Region screenshot (Ctrl+Shift+S)', click: () => openRegionSelector() },
+    { label: 'Clipboard history (Ctrl+Shift+V)', click: () => openClips() },
+    { type: 'separator' },
     { label: 'Open Command Center', click: () => createDashboard() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
@@ -145,6 +297,25 @@ app.whenReady().then(() => {
 
   createTray(registered || 'click tray icon');
 
+  // Power-user global hotkeys
+  globalShortcut.register('Control+Shift+A', () => openAsk());
+  globalShortcut.register('Control+Shift+S', () => openRegionSelector());
+  globalShortcut.register('Control+Shift+V', () => openClips());
+  globalShortcut.register('Control+Shift+E', async () => {
+    // "Ask about selection" — simulate Ctrl+C to grab selection, then open ask with it
+    const before = clipboard.readText();
+    await automation.runPowerShell(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^c')`);
+    await new Promise(r => setTimeout(r, 220));
+    const after = clipboard.readText();
+    if (after && after.length > 0) {
+      openAsk({ mode: 'selection', text: after });
+    } else {
+      openAsk();
+    }
+  });
+
+  startClipboardWatcher();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -159,6 +330,10 @@ ipcMain.on('resize-collapsed', () => collapseWindow());
 
 ipcMain.on('open-dashboard',  () => createDashboard());
 ipcMain.on('close-dashboard', () => dashboardWindow && dashboardWindow.close());
+ipcMain.on('close-ask',       () => askWindow && askWindow.close());
+ipcMain.on('close-clips',     () => clipsWindow && clipsWindow.close());
+ipcMain.on('cancel-region',   () => regionWindow && regionWindow.close());
+ipcMain.on('capture-region',  (_e, rect) => captureRegion(rect));
 ipcMain.handle('minimize-dashboard', () => dashboardWindow && dashboardWindow.minimize());
 ipcMain.handle('maximize-dashboard', () => {
   if (!dashboardWindow) return;
