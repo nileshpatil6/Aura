@@ -249,10 +249,48 @@ $wsh.SendKeys('${mapped}')
 Write-Output "pressed ${key}"`;
 }
 
-async function computerAction({ action, x, y, text, key, direction, clicks, scaleX, scaleY }) {
-  // Scale from screenshot coords (1280x720) to actual screen coords
-  const sx = x != null ? Math.round(x * (scaleX || 1)) : 0;
-  const sy = y != null ? Math.round(y * (scaleY || 1)) : 0;
+// Resolve coordinates: accept normalized (nx/ny in 0-999) OR pixel (x/y in 1280x720 space).
+// Normalized is preferred (Gemini 2.5 Computer Use convention).
+function resolveXY({ x, y, nx, ny }, ctx) {
+  if (nx != null && ny != null) {
+    return {
+      x: Math.round((nx / 1000) * ctx.physW),
+      y: Math.round((ny / 1000) * ctx.physH),
+    };
+  }
+  return {
+    x: x != null ? Math.round(x * (ctx.scaleX || 1)) : 0,
+    y: y != null ? Math.round(y * (ctx.scaleY || 1)) : 0,
+  };
+}
+
+function buildDragScript(x1, y1, x2, y2) {
+  return `${WIN32_BLOCK}
+[Win32Input]::SetCursorPos(${x1}, ${y1})
+Start-Sleep -Milliseconds 120
+[Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)
+Start-Sleep -Milliseconds 80
+$steps = 20
+for ($i=1; $i -le $steps; $i++) {
+  $px = ${x1} + [int]((${x2} - ${x1}) * $i / $steps)
+  $py = ${y1} + [int]((${y2} - ${y1}) * $i / $steps)
+  [Win32Input]::SetCursorPos($px, $py)
+  Start-Sleep -Milliseconds 15
+}
+Start-Sleep -Milliseconds 80
+[Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0)
+Write-Output "dragged ${x1},${y1} -> ${x2},${y2}"`;
+}
+
+async function computerAction(params) {
+  const { action, text, key, clicks } = params;
+  const ctx = {
+    physW: params.physW || 1920,
+    physH: params.physH || 1080,
+    scaleX: params.scaleX,
+    scaleY: params.scaleY,
+  };
+  const { x: sx, y: sy } = resolveXY(params, ctx);
   const scrollClicks = clicks || 3;
 
   let script;
@@ -275,13 +313,17 @@ async function computerAction({ action, x, y, text, key, direction, clicks, scal
     case 'key':
       script = buildKeyScript(key || 'enter');
       break;
+    case 'drag': {
+      const { x: ex, y: ey } = resolveXY({ x: params.x2, y: params.y2, nx: params.nx2, ny: params.ny2 }, ctx);
+      script = buildDragScript(sx, sy, ex, ey);
+      break;
+    }
     default:
       return { success: false, output: `Unknown action: ${action}` };
   }
 
   const result = await runPowerShell(script);
-  // Small delay so UI has time to react before screenshot
-  await new Promise(r => setTimeout(r, 900));
+  await new Promise(r => setTimeout(r, 700));
   return result;
 }
 

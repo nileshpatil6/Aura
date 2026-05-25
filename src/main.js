@@ -132,13 +132,25 @@ ipcMain.on('set-ignore-mouse', (_e, ignore) => {
   mainWindow?.setIgnoreMouseEvents(ignore, { forward: true });
 });
 
-ipcMain.handle('take-screenshot', async () => {
+async function captureScreen(w = 1280, h = 720) {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
-    thumbnailSize: { width: 1280, height: 720 },
+    thumbnailSize: { width: w, height: h },
   });
   if (!sources.length) return null;
-  return sources[0].thumbnail.toJPEG(80).toString('base64');
+  return sources[0].thumbnail.toJPEG(82).toString('base64');
+}
+
+ipcMain.handle('take-screenshot', () => captureScreen(1280, 720));
+
+// Higher-res clean shot for Computer Use (1440x900 is recommended). Hide overlay first.
+ipcMain.handle('take-screenshot-clean', async () => {
+  const wasVisible = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+  if (wasVisible) mainWindow.hide();
+  await new Promise(r => setTimeout(r, 180));
+  const b64 = await captureScreen(1440, 900);
+  if (wasVisible && mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+  return b64;
 });
 
 ipcMain.handle('run-powershell', (_e, command) => automation.runPowerShell(command));
@@ -148,8 +160,10 @@ ipcMain.handle('show-notification', (_e, title, message) => automation.showNotif
 ipcMain.handle('get-system-info', (_e, type) => automation.getSystemInfo(type));
 
 ipcMain.handle('computer-action', (_e, params) => {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-  const scaleX = width / 1280;
-  const scaleY = height / 720;
-  return automation.computerAction({ ...params, scaleX, scaleY });
+  const display = screen.getPrimaryDisplay();
+  const physW = display.bounds.width * display.scaleFactor;
+  const physH = display.bounds.height * display.scaleFactor;
+  const scaleX = physW / 1280;
+  const scaleY = physH / 720;
+  return automation.computerAction({ ...params, physW, physH, scaleX, scaleY });
 });

@@ -12,7 +12,8 @@ CAPABILITIES:
 - show_notification: Show a Windows toast notification
 - get_system_info: Get time/date, battery, memory, disk, running processes, IP, clipboard
 - capture_screen: See what's on the user's screen
-- computer_action: Click, type, scroll, or press keys on screen. After each action you automatically get a fresh screenshot so you can decide the next step.
+- do_computer_task: For ANY UI interaction (clicking, typing into fields, scrolling, navigating). Pass a clear goal in plain English; a precision vision specialist handles the actual pixel clicks reliably. Always prefer this over guessing coordinates yourself.
+- press_key: Press a single key or hotkey instantly (no vision needed). Use for hotkeys only.
 
 WHEN TO USE TOOLS vs ANSWER DIRECTLY:
 - Answer directly from your knowledge for: general questions, explanations, definitions, math, coding help, advice, history, science, language, recommendations, and anything you already know. Do NOT call any tool for these.
@@ -22,12 +23,9 @@ WHEN TO USE TOOLS vs ANSWER DIRECTLY:
 - Only call run_command / get_system_info when the user asks about their specific system state.
 
 AUTONOMOUS MULTI-STEP BEHAVIOR:
-- When given a multi-step task (e.g. "open chrome and search cats"), execute each step as a computer_action, then analyze the screenshot that comes back, and keep acting until the task is complete — no user input needed between steps.
-- After computer_action you receive the updated screen. Use it to verify progress and decide what to do next.
-- Coordinates are in the 1280x720 screenshot space.
-- For clicking UI elements, use capture_screen first to see the screen, then computer_action to click the target.
-- For typing: click the input field first (computer_action click), then type (computer_action type).
-- Stop acting when the goal is achieved or after 10 steps.
+- For complex on-screen tasks like "open chrome and search cats" or "click the submit button", call do_computer_task with the full goal in plain English. A precision vision specialist will handle clicking and typing for you. Don't try to guess pixel coordinates yourself.
+- For simple OS actions, prefer the dedicated tool (open_application for launching apps, search_web for the browser, run_command for shell tasks).
+- Combine tools when natural — open the app first, then hand the UI work to do_computer_task.
 - Keep spoken responses short — one or two sentences max.`;
 
 const TOOLS = [{
@@ -114,23 +112,28 @@ const TOOLS = [{
       },
     },
     {
-      name: 'computer_action',
-      description: 'Performs a mouse or keyboard action on screen. After execution, you automatically receive a screenshot of the result so you can continue multi-step tasks without user input. Coordinates are in 1280x720 space.',
+      name: 'do_computer_task',
+      description: 'Delegate a UI task to the precision computer-use specialist. Use this for ANY task that needs clicking, typing into fields, scrolling to find things, or interacting with on-screen elements. Give a clear high-level goal — the specialist will plan and execute steps with pixel-accurate clicks using a dedicated vision model.',
       parameters: {
         type: 'OBJECT',
         properties: {
-          action: {
+          goal: {
             type: 'STRING',
-            description: 'One of: click, right_click, double_click, move, scroll_down, scroll_up, type, key',
+            description: 'High-level goal in plain English. Examples: "Click the search bar in Chrome and type cats", "Open the file menu and click Save", "Scroll down to find the submit button and click it".',
           },
-          x: { type: 'NUMBER', description: 'X coordinate (0-1280) for mouse actions' },
-          y: { type: 'NUMBER', description: 'Y coordinate (0-720) for mouse actions' },
-          text: { type: 'STRING', description: 'Text to type (for action=type)' },
-          key: { type: 'STRING', description: 'Key name to press (for action=key). Examples: enter, tab, escape, ctrl+c, ctrl+v, ctrl+a, ctrl+z, f5' },
-          direction: { type: 'STRING', description: 'Scroll direction: up or down (for scroll actions)' },
-          clicks: { type: 'NUMBER', description: 'Number of scroll clicks (default 3)' },
         },
-        required: ['action'],
+        required: ['goal'],
+      },
+    },
+    {
+      name: 'press_key',
+      description: 'Press a single key or key combination instantly (no vision needed). Use for hotkeys only — for clicking or typing into fields, use do_computer_task instead.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          key: { type: 'STRING', description: 'Key name. Examples: enter, tab, escape, ctrl+c, ctrl+v, ctrl+a, ctrl+z, f5, win+d' },
+        },
+        required: ['key'],
       },
     },
   ],
@@ -357,13 +360,27 @@ class GeminiLive {
         result = await window.electronAPI.showNotification(args.title, args.message);
       } else if (name === 'get_system_info') {
         result = await window.electronAPI.getSystemInfo(args.type);
-      } else if (name === 'computer_action') {
-        this.callbacks.onTranscript(`Action: ${args.action}${args.text ? ` "${args.text}"` : ''}…`);
-        result = await window.electronAPI.computerAction(args);
-        // autonomous loop: send result then auto-screenshot so Gemini sees updated screen
-        this._sendToolResponse(id, name, { success: result.success, output: result.output });
+      } else if (name === 'do_computer_task') {
+        this.callbacks.onTranscript(`Computer task: ${args.goal}…`);
+        const apiKey = localStorage.getItem('gemini_api_key') || '';
+        const agent = new window.ComputerUseAgent({
+          onStep: (s) => this.callbacks.onActivity?.({ kind: 'cu_step', ...s }),
+          onLog:  (m) => this.callbacks.onTranscript(`  · ${m}`),
+        });
+        this._cuAgent = agent;
+        try {
+          const summary = await agent.run({ apiKey, goal: args.goal, maxSteps: 15 });
+          result = { success: true, output: summary };
+        } catch (err) {
+          result = { success: false, output: err.message };
+        }
+        this._cuAgent = null;
+        this._sendToolResponse(id, name, result);
         await this._sendAutoScreenshot();
         return;
+      } else if (name === 'press_key') {
+        this.callbacks.onTranscript(`Pressing ${args.key}…`);
+        result = await window.electronAPI.computerAction({ action: 'key', key: args.key });
       } else {
         result = { success: false, output: `Unknown tool: ${name}` };
       }
