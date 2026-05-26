@@ -401,6 +401,11 @@ document.querySelectorAll('.example').forEach(b => {
   b.onclick = () => { document.getElementById('goal').value = b.textContent; };
 });
 
+// Receive goal from dashboard (run macro)
+api.onAgentSetGoal?.((_e, goal) => {
+  document.getElementById('goal').value = goal;
+});
+
 function setStatus(label, mode) {
   document.getElementById('status-label').textContent = label;
   const pill = document.getElementById('status-pill');
@@ -408,9 +413,13 @@ function setStatus(label, mode) {
   if (mode) pill.classList.add(mode);
 }
 
+function escapeHtml(s) {
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 function log(msg) {
   const div = document.createElement('div');
-  div.innerHTML = `<span class="ts">${new Date().toTimeString().slice(0,8)}</span>${msg}`;
+  const ts = new Date().toTimeString().slice(0,8);
+  div.innerHTML = `<span class="ts">${ts}</span>${escapeHtml(msg)}`;
   const el = document.getElementById('log');
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
@@ -425,10 +434,13 @@ function renderSteps(plan, currentIdx = -1, status = {}) {
     if (i === currentIdx) div.classList.add('active');
     if (status[i] === 'done') div.classList.add('done');
     if (status[i] === 'fail') div.classList.add('fail');
-    div.innerHTML = `
-      <div class="num">${status[i] === 'done' ? '' : (i + 1)}</div>
-      <div class="desc">${p}</div>
-      <div class="stat">${status[i] || ''}</div>`;
+    const num = document.createElement('div'); num.className = 'num';
+    num.textContent = status[i] === 'done' ? '' : (i + 1);
+    const desc = document.createElement('div'); desc.className = 'desc';
+    desc.textContent = p;
+    const stat = document.createElement('div'); stat.className = 'stat';
+    stat.textContent = status[i] || '';
+    div.append(num, desc, stat);
     stepsEl.appendChild(div);
   });
 }
@@ -436,7 +448,7 @@ function renderSteps(plan, currentIdx = -1, status = {}) {
 function addAction(text, ok = true) {
   const feed = document.getElementById('action-feed');
   const div = document.createElement('div');
-  div.style.cssText = `padding:8px 12px; background:rgba(${ok?'0,217,255':'255,59,107'},0.08); border:1px solid rgba(${ok?'0,217,255':'255,59,107'},0.2); border-radius:8px; font-family:var(--mono); font-size:10px; color:rgba(${ok?'180,220,250':'255,180,200'},0.9);`;
+  div.style.cssText = `padding:8px 12px; background:rgba(${ok?'0,217,255':'255,59,107'},0.08); border:1px solid rgba(${ok?'0,217,255':'255,59,107'},0.2); border-radius:8px; font-family:var(--mono); font-size:10px; color:rgba(${ok?'180,220,250':'255,180,200'},0.9); user-select:text;`;
   div.textContent = text;
   feed.insertBefore(div, feed.firstChild);
   while (feed.children.length > 8) feed.removeChild(feed.lastChild);
@@ -465,29 +477,45 @@ Example output: ["Open Chrome browser", "Navigate to amazon.in", "Click the sear
   try { return JSON.parse(clean); } catch { return [goal]; }
 }
 
-async function executeStep(apiKey, step) {
-  // Use Computer Use specialist for UI steps, direct tools for shell steps
-  const lower = step.toLowerCase();
+// Known app shortcuts (avoid Computer Use for these — much faster)
+const KNOWN_APPS = ['chrome','firefox','edge','brave','opera','vscode','vs code','notepad','calculator',
+  'paint','explorer','file explorer','word','excel','powerpoint','outlook','onenote','spotify',
+  'whatsapp','telegram','discord','slack','teams','zoom','steam','vlc','obs','terminal','powershell','cmd'];
 
-  // App opening shortcut
-  const openMatch = lower.match(/^(open|launch|start)\s+(?:the\s+)?(\w+(?:\s+\w+)?)/);
-  if (openMatch) {
-    addAction(`open: ${openMatch[2]}`);
-    const r = await api.openApp(openMatch[2]);
-    await new Promise(r => setTimeout(r, 1500));
-    return { ok: true, output: r.output };
+function tryAppShortcut(step) {
+  const lower = step.toLowerCase().trim();
+  // Must start with open/launch/start AND the next word(s) match a known app
+  const m = lower.match(/^(?:open|launch|start)\s+(?:the\s+)?(?:browser\s+|app\s+)?([\w\s]+?)(?:\s+browser|\s+app|$|,)/);
+  if (!m) return null;
+  const candidate = m[1].trim();
+  // Try exact match or contains
+  const found = KNOWN_APPS.find(a => a === candidate || candidate.startsWith(a) || candidate.endsWith(a));
+  return found || null;
+}
+
+async function executeStep(apiKey, step) {
+  const app = tryAppShortcut(step);
+  if (app) {
+    addAction(`open ${app}`);
+    log(`  → using fast app launcher for "${app}"`);
+    await api.openApp(app);
+    await new Promise(r => setTimeout(r, 2500));
+    const b64 = await api.takeScreenshotClean();
+    if (b64) showPreview(b64, step);
+    return { ok: true, output: `Opened ${app}` };
   }
 
-  // Defer to Computer Use specialist for everything else
+  // Defer to Computer Use specialist
   const agent = new window.ComputerUseAgent({
-    onStep: (s) => addAction(`${s.action || s.summary || JSON.stringify(s)}`.slice(0, 80)),
-    onLog: (m) => log(m),
+    onStep: (s) => {
+      const desc = s.action ? `${s.action}: ${JSON.stringify(s.args || {}).slice(0, 50)}` : (s.summary || '');
+      addAction(desc.slice(0, 80));
+    },
+    onLog: (m) => log(`  ${m}`),
   });
-  // Update preview after each action via screenshot
   try {
-    const summary = await agent.run({ apiKey, goal: step, maxSteps: 8 });
-    // Capture final screenshot for the preview
-    const b64 = await api.takeScreenshot();
+    const summary = await agent.run({ apiKey, goal: step, maxSteps: 6 });
+    const b64 = await api.takeScreenshotClean();
     if (b64) showPreview(b64, step);
     return { ok: true, output: summary };
   } catch (err) {
@@ -521,39 +549,49 @@ document.getElementById('run-btn').onclick = async () => {
     if (!apiKey) throw new Error('No API key. Open dashboard settings.');
 
     const plan = await planTask(apiKey, goal);
-    log(`Plan generated: ${plan.length} steps`);
+    if (!plan.length) throw new Error('Could not generate a plan.');
+    log(`Plan: ${plan.length} steps`);
     const status = {};
     renderSteps(plan, -1, status);
 
     await api.storePush('activity', { kind: 'command', summary: `Agent task: ${goal}` });
 
     setStatus('RUNNING', 'running');
+    // Hide all Aura windows so they don't appear in screenshots or block clicks
+    await api.setActionMode(true);
+
     for (let i = 0; i < plan.length; i++) {
       if (aborted) break;
       renderSteps(plan, i, status);
       log(`▶ Step ${i+1}: ${plan[i]}`);
+      try { api.agentProgress((i + 0.5) / plan.length); } catch {}
       const r = await executeStep(apiKey, plan[i]);
       status[i] = r.ok ? 'done' : 'fail';
-      log(r.ok ? `  ✓ ${r.output?.slice(0,80) || ''}` : `  ✗ ${r.output}`);
+      log(r.ok ? `  ✓ ${(r.output||'').slice(0,80)}` : `  ✗ ${r.output}`);
       renderSteps(plan, i, status);
       if (!r.ok) break;
     }
+
     if (aborted) {
       setStatus('STOPPED', 'error');
       log('Stopped by user.');
-    } else if (Object.values(status).every(s => s === 'done')) {
+    } else if (plan.every((_, i) => status[i] === 'done')) {
       setStatus('COMPLETE', 'done');
-      log('All steps completed.');
+      log('✓ All steps completed.');
     } else {
       setStatus('PARTIAL', 'error');
     }
   } catch (err) {
     setStatus('ERROR', 'error');
     log(`Error: ${err.message}`);
+  } finally {
+    // Restore Aura windows + agent UI
+    try { await api.setActionMode(false); } catch {}
+    try { await api.restoreAgent(); } catch {}
+    running = false;
+    document.getElementById('run-btn').style.display = 'block';
+    document.getElementById('stop-btn').style.display = 'none';
   }
-  running = false;
-  document.getElementById('run-btn').style.display = 'block';
-  document.getElementById('stop-btn').style.display = 'none';
 };
 </script>
 </body>

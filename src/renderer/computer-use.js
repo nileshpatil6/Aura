@@ -63,6 +63,14 @@ class ComputerUseAgent {
       const b64 = await window.electronAPI.takeScreenshotClean();
       if (!b64) throw new Error('Screenshot failed');
 
+      // Trim earlier screenshots to keep request size manageable — keep only the
+      // most recent inlineData while preserving the text/functionCall/functionResponse trail.
+      for (const c of contents) {
+        if (c.parts) {
+          c.parts = c.parts.filter(p => !p.inlineData);
+        }
+      }
+
       contents.push({
         role: 'user',
         parts: [{ inlineData: { mimeType: 'image/jpeg', data: b64 } }],

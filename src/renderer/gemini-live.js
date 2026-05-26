@@ -328,10 +328,7 @@ class GeminiLive {
     this._voice = voice;
     this.callbacks.onStateChange('listening');
 
-    const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
-    this.ws = ws;
-
-    // Compose personalized system prompt with memory + recent context
+    // Compose personalized system prompt FIRST so handlers are ready before WS opens.
     let personalPrompt = SYSTEM_PROMPT;
     try {
       const mem = await window.electronAPI?.storeGet('memory') || {};
@@ -346,6 +343,9 @@ class GeminiLive {
       }
       if (extra.length) personalPrompt += '\n\n' + extra.join('\n\n');
     } catch {}
+
+    const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
+    this.ws = ws;
 
     ws.onopen = () => {
       console.log('WS open, sending setup...');

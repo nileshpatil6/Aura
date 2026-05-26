@@ -12,6 +12,7 @@ let clipsWindow = null;
 let agentWindow = null;
 let tray = null;
 let isVisible = false;
+let actionModeHidden = [];  // windows we hid during action mode
 
 const COLLAPSED_W = 88;
 const COLLAPSED_H = 56;
@@ -220,6 +221,17 @@ function startClipboardWatcher() {
   }, 1500);
 }
 // ───── Agent Console ────────────────────────────────────────────────────────
+function openAgentWithGoal(goal) {
+  openAgent();
+  // Wait for ready then send goal
+  const send = () => agentWindow?.webContents.send('agent-set-goal', goal);
+  if (agentWindow?.webContents.isLoading()) {
+    agentWindow.webContents.once('did-finish-load', send);
+  } else {
+    setTimeout(send, 80);
+  }
+}
+
 function openAgent() {
   if (agentWindow && !agentWindow.isDestroyed()) { agentWindow.focus(); return; }
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
@@ -357,7 +369,11 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  try { visionMemory.stop(); } catch {}
+  exitActionMode();
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.on('collapse', () => { collapseWindow(); isVisible = false; });
@@ -371,7 +387,8 @@ ipcMain.on('close-ask',       () => askWindow && askWindow.close());
 ipcMain.on('close-clips',     () => clipsWindow && clipsWindow.close());
 ipcMain.on('cancel-region',   () => regionWindow && regionWindow.close());
 ipcMain.on('capture-region',  (_e, rect) => captureRegion(rect));
-ipcMain.on('open-agent',      () => openAgent());
+ipcMain.on('open-agent',          () => openAgent());
+ipcMain.on('open-agent-with-goal', (_e, goal) => openAgentWithGoal(goal));
 ipcMain.on('close-agent',     () => agentWindow && agentWindow.close());
 ipcMain.handle('minimize-agent', () => agentWindow && agentWindow.minimize());
 
@@ -403,14 +420,53 @@ async function captureScreen(w = 1280, h = 720) {
 
 ipcMain.handle('take-screenshot', () => captureScreen(1280, 720));
 
-// Higher-res clean shot for Computer Use (1440x900 is recommended). Hide overlay first.
+// Aura windows we can fully hide for clean screenshots / unobstructed clicks.
+// Agent window is excluded here — we minimize it separately so its JS keeps running.
+function hideableAuraWindows() {
+  return [mainWindow, dashboardWindow, askWindow, clipsWindow, regionWindow]
+    .filter(w => w && !w.isDestroyed());
+}
+function allAuraWindows() {
+  const list = hideableAuraWindows();
+  if (agentWindow && !agentWindow.isDestroyed()) list.push(agentWindow);
+  return list;
+}
+function enterActionMode() {
+  if (actionModeHidden.length) return;
+  actionModeHidden = hideableAuraWindows().filter(w => w.isVisible());
+  actionModeHidden.forEach(w => w.hide());
+  // Minimize agent separately so user sees their actual screen
+  if (agentWindow && !agentWindow.isDestroyed() && agentWindow.isVisible()) {
+    agentWindow.minimize();
+  }
+}
+function exitActionMode() {
+  actionModeHidden.forEach(w => { try { w.show(); } catch {} });
+  actionModeHidden = [];
+}
+
+// Higher-res clean shot for Computer Use. Hide visible (non-minimized) Aura overlays first.
 ipcMain.handle('take-screenshot-clean', async () => {
-  const wasVisible = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
-  if (wasVisible) mainWindow.hide();
-  await new Promise(r => setTimeout(r, 180));
+  const toRestore = allAuraWindows()
+    .filter(w => w.isVisible() && !w.isMinimized());
+  toRestore.forEach(w => w.hide());
+  await new Promise(r => setTimeout(r, 220));
   const b64 = await captureScreen(1440, 900);
-  if (wasVisible && mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+  toRestore.forEach(w => { try { w.show(); } catch {} });
   return b64;
+});
+
+ipcMain.handle('set-action-mode', (_e, on) => { on ? enterActionMode() : exitActionMode(); });
+ipcMain.handle('agent-progress', (_e, fraction) => {
+  if (agentWindow && !agentWindow.isDestroyed()) agentWindow.setProgressBar(fraction);
+});
+ipcMain.handle('restore-agent', () => {
+  if (agentWindow && !agentWindow.isDestroyed()) {
+    if (agentWindow.isMinimized()) agentWindow.restore();
+    agentWindow.show();
+    agentWindow.focus();
+    try { agentWindow.setProgressBar(-1); } catch {}
+  }
 });
 
 ipcMain.handle('run-powershell', (_e, command) => automation.runPowerShell(command));

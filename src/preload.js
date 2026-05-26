@@ -23,9 +23,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAskContext:   (cb) => ipcRenderer.on('ask-context', cb),
 
   // Agent Console
-  openAgent:      () => ipcRenderer.send('open-agent'),
+  openAgent:         () => ipcRenderer.send('open-agent'),
+  openAgentWithGoal: (g) => ipcRenderer.send('open-agent-with-goal', g),
+  onAgentSetGoal:    (cb) => ipcRenderer.on('agent-set-goal', cb),
   closeAgent:     () => ipcRenderer.send('close-agent'),
   minimizeAgent:  () => ipcRenderer.invoke('minimize-agent'),
+  restoreAgent:   () => ipcRenderer.invoke('restore-agent'),
+  agentProgress:  (f) => ipcRenderer.invoke('agent-progress', f),
+  setActionMode:  (on) => ipcRenderer.invoke('set-action-mode', on),
 
   // Vision Memory
   visionStart:   (sec) => ipcRenderer.invoke('vision-start', sec),

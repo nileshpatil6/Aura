@@ -36,7 +36,7 @@ setInterval(tickClock, 1000); tickClock();
 function setStatus(label, mode) {
   const pill = document.getElementById('status-pill');
   document.getElementById('status-label').textContent = label;
-  pill.classList.remove('live', 'error');
+  pill.classList.remove('live', 'error', 'running', 'done');
   if (mode) pill.classList.add(mode);
 }
 setStatus('READY', 'live');
@@ -164,10 +164,13 @@ const activityTab = {
     items.forEach(a => {
       const row = document.createElement('div');
       row.className = 'act-row';
-      row.innerHTML = `
-        <div class="act-time">${new Date(a.ts).toLocaleTimeString()}</div>
-        <div class="act-kind ${a.kind}">${a.kind}</div>
-        <div class="act-summary">${a.summary || ''}</div>`;
+      const t = document.createElement('div'); t.className = 'act-time';
+      t.textContent = new Date(a.ts).toLocaleTimeString();
+      const k = document.createElement('div'); k.className = `act-kind ${a.kind}`;
+      k.textContent = a.kind;
+      const s = document.createElement('div'); s.className = 'act-summary';
+      s.textContent = a.summary || '';
+      row.append(t, k, s);
       feed.appendChild(row);
     });
   },
@@ -332,14 +335,14 @@ const macrosTab = {
     this.list.forEach(m => {
       const card = document.createElement('div');
       card.className = 'macro-card';
-      card.innerHTML = `
-        <div class="macro-name">${m.name}</div>
-        <div class="macro-desc">${m.desc || m.goal}</div>
-        <div class="macro-actions">
-          <button class="btn-primary run" data-id="${m.id}">Run</button>
-          <button class="btn-ghost edit" data-id="${m.id}">Edit</button>
-          <button class="btn-ghost del" data-id="${m.id}" style="color:var(--red);border-color:rgba(255,59,107,0.3)">×</button>
-        </div>`;
+      const name = document.createElement('div'); name.className = 'macro-name'; name.textContent = m.name;
+      const desc = document.createElement('div'); desc.className = 'macro-desc'; desc.textContent = m.desc || m.goal;
+      const actions = document.createElement('div'); actions.className = 'macro-actions';
+      actions.innerHTML = `
+        <button class="btn-primary run" data-id="${m.id}">Run</button>
+        <button class="btn-ghost edit" data-id="${m.id}">Edit</button>
+        <button class="btn-ghost del" data-id="${m.id}" style="color:var(--red);border-color:rgba(255,59,107,0.3)">×</button>`;
+      card.append(name, desc, actions);
       grid.appendChild(card);
     });
     grid.querySelectorAll('.run').forEach(b => b.onclick = (e) => this.run(e.target.dataset.id));
@@ -349,16 +352,9 @@ const macrosTab = {
   async run(id) {
     const m = this.list.find(x => x.id === id);
     if (!m) return;
-    setStatus('RUNNING MACRO', '');
-    await api.storePush('activity', { kind: 'command', summary: `Macro: ${m.name}` });
-    try {
-      const reply = await sendToGemini(`Execute this macro task: ${m.goal}`);
-      await api.storePush('history', { role: 'user', text: `[macro] ${m.name}` });
-      await api.storePush('history', { role: 'assistant', text: reply });
-      setStatus('READY', 'live');
-    } catch (err) {
-      setStatus('ERROR', 'error');
-    }
+    await api.storePush('activity', { kind: 'command', summary: `Run macro: ${m.name}` });
+    // Open Agent Console with the macro's goal pre-filled — actual autonomous execution
+    api.openAgentWithGoal(m.goal);
   },
   edit(id) {
     const m = this.list.find(x => x.id === id);
@@ -477,7 +473,8 @@ const recallTab = {
     this.results = await api.visionSearch('');
     this.render();
   },
-  render() {
+  renderToken: 0,
+  async render() {
     const grid = document.getElementById('recall-grid');
     const stats = document.getElementById('recall-stats');
     grid.innerHTML = '';
@@ -486,36 +483,61 @@ const recallTab = {
       return;
     }
     stats.textContent = `${this.results.length} memories · oldest ${new Date(this.results[this.results.length-1].ts).toLocaleString()}`;
-    this.results.forEach(async (e) => {
+    const myToken = ++this.renderToken;
+    // Create placeholders synchronously to preserve order
+    const cards = this.results.map(e => {
       const card = document.createElement('div');
       card.style.cssText = 'background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:all 0.2s;';
       card.onmouseenter = () => card.style.borderColor = 'var(--border-bright)';
       card.onmouseleave = () => card.style.borderColor = 'var(--border)';
-      const b64 = await api.visionImage(e.path);
       card.innerHTML = `
-        ${b64 ? `<img src="data:image/jpeg;base64,${b64}" style="width:100%; display:block;" />` : '<div style="height:130px; background:rgba(0,0,0,0.4);"></div>'}
+        <div class="rec-thumb" style="height:130px; background:rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; color:rgba(150,170,200,0.4); font-family:var(--mono); font-size:10px;">loading…</div>
         <div style="padding:10px 12px;">
           <div style="font-family:var(--mono); font-size:10px; color:var(--cyan); margin-bottom:4px;">${new Date(e.ts).toLocaleString()}</div>
-          <div style="font-size:11px; color:var(--text-dim); line-height:1.5; max-height:46px; overflow:hidden;">${(e.text || 'No description').slice(0, 140)}</div>
+          <div style="font-size:11px; color:var(--text-dim); line-height:1.5; max-height:46px; overflow:hidden;">${escapeHtml((e.text || 'No description').slice(0, 140))}</div>
         </div>`;
-      card.onclick = () => {
-        // Open big preview in new modal
-        showRecallDetail(e, b64);
-      };
       grid.appendChild(card);
+      return { card, e };
     });
+    // Lazy-load images one at a time so we don't flood IPC
+    for (const { card, e } of cards) {
+      if (myToken !== this.renderToken) return; // newer render started, bail
+      const b64 = await api.visionImage(e.path);
+      if (myToken !== this.renderToken) return;
+      const thumb = card.querySelector('.rec-thumb');
+      if (b64) {
+        thumb.outerHTML = `<img src="data:image/jpeg;base64,${b64}" style="width:100%; display:block;" />`;
+      }
+      card.onclick = () => showRecallDetail(e, b64);
+    }
   },
 };
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 function showRecallDetail(e, b64) {
   const m = document.createElement('div');
   m.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:9999; display:flex; align-items:center; justify-content:center; padding:40px; cursor:pointer; backdrop-filter:blur(10px);';
-  m.innerHTML = `
-    <div style="max-width:1000px; max-height:90vh; background:var(--panel-solid); border:1px solid var(--border-bright); border-radius:16px; overflow:hidden; cursor:default;" onclick="event.stopPropagation()">
-      <div style="padding:14px 20px; border-bottom:1px solid var(--border); font-family:var(--mono); font-size:12px; color:var(--cyan);">${new Date(e.ts).toLocaleString()}</div>
-      ${b64 ? `<img src="data:image/jpeg;base64,${b64}" style="max-width:100%; max-height:65vh; display:block; margin:0 auto;" />` : ''}
-      <div style="padding:16px 20px; color:var(--text); font-size:13px; line-height:1.7;">${e.text || 'No OCR text'}</div>
-    </div>`;
+  const card = document.createElement('div');
+  card.style.cssText = 'max-width:1000px; max-height:90vh; background:var(--panel-solid); border:1px solid var(--border-bright); border-radius:16px; overflow:hidden; cursor:default;';
+  card.onclick = (ev) => ev.stopPropagation();
+  const head = document.createElement('div');
+  head.style.cssText = 'padding:14px 20px; border-bottom:1px solid var(--border); font-family:var(--mono); font-size:12px; color:var(--cyan);';
+  head.textContent = new Date(e.ts).toLocaleString();
+  card.appendChild(head);
+  if (b64) {
+    const img = document.createElement('img');
+    img.src = `data:image/jpeg;base64,${b64}`;
+    img.style.cssText = 'max-width:100%; max-height:65vh; display:block; margin:0 auto;';
+    card.appendChild(img);
+  }
+  const desc = document.createElement('div');
+  desc.style.cssText = 'padding:16px 20px; color:var(--text); font-size:13px; line-height:1.7; user-select:text; white-space:pre-wrap;';
+  desc.textContent = e.text || 'No OCR text';
+  card.appendChild(desc);
+  m.appendChild(card);
   m.onclick = () => m.remove();
   document.body.appendChild(m);
 }
