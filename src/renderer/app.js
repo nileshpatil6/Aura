@@ -180,6 +180,8 @@ document.querySelectorAll('.chip').forEach(btn => {
       if (a === 'play_pause') await api.mediaControl('play_pause');
       else if (a === 'next')  await api.mediaControl('next');
       else if (a === 'mute')  await api.mediaControl('mute');
+      else if (a === 'agent') api.openAgent();
+      else if (a === 'ask')   api.openAsk();
       else if (a === 'clipboard') {
         const r = await api.readClipboard();
         appendTranscript(`Clipboard: ${(r.output || '').slice(0, 200)}\n`);

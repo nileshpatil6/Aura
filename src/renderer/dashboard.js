@@ -15,6 +15,7 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     if (tab === 'macros') macrosTab.render();
     if (tab === 'memory') memoryTab.load();
     if (tab === 'settings') settingsTab.load();
+    if (tab === 'recall') recallTab.load();
   });
 });
 
@@ -459,6 +460,84 @@ function flashSave() {
   s.classList.add('show');
   setTimeout(() => s.classList.remove('show'), 1800);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// RECALL TAB (Photographic Memory)
+// ═══════════════════════════════════════════════════════════════════
+const recallTab = {
+  results: [],
+  async load() {
+    // Read settings + status
+    const settings = await api.storeGet('settings') || {};
+    const status = await api.visionStatus();
+    document.getElementById('vision-toggle').checked = status.enabled;
+    if (!status.enabled && settings.visionMemoryEnabled) {
+      // Reflect pref but actually off
+    }
+    this.results = await api.visionSearch('');
+    this.render();
+  },
+  render() {
+    const grid = document.getElementById('recall-grid');
+    const stats = document.getElementById('recall-stats');
+    grid.innerHTML = '';
+    if (!this.results.length) {
+      stats.textContent = 'No memories yet. Toggle ON above to start capturing.';
+      return;
+    }
+    stats.textContent = `${this.results.length} memories · oldest ${new Date(this.results[this.results.length-1].ts).toLocaleString()}`;
+    this.results.forEach(async (e) => {
+      const card = document.createElement('div');
+      card.style.cssText = 'background:var(--panel); border:1px solid var(--border); border-radius:10px; overflow:hidden; cursor:pointer; transition:all 0.2s;';
+      card.onmouseenter = () => card.style.borderColor = 'var(--border-bright)';
+      card.onmouseleave = () => card.style.borderColor = 'var(--border)';
+      const b64 = await api.visionImage(e.path);
+      card.innerHTML = `
+        ${b64 ? `<img src="data:image/jpeg;base64,${b64}" style="width:100%; display:block;" />` : '<div style="height:130px; background:rgba(0,0,0,0.4);"></div>'}
+        <div style="padding:10px 12px;">
+          <div style="font-family:var(--mono); font-size:10px; color:var(--cyan); margin-bottom:4px;">${new Date(e.ts).toLocaleString()}</div>
+          <div style="font-size:11px; color:var(--text-dim); line-height:1.5; max-height:46px; overflow:hidden;">${(e.text || 'No description').slice(0, 140)}</div>
+        </div>`;
+      card.onclick = () => {
+        // Open big preview in new modal
+        showRecallDetail(e, b64);
+      };
+      grid.appendChild(card);
+    });
+  },
+};
+
+function showRecallDetail(e, b64) {
+  const m = document.createElement('div');
+  m.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:9999; display:flex; align-items:center; justify-content:center; padding:40px; cursor:pointer; backdrop-filter:blur(10px);';
+  m.innerHTML = `
+    <div style="max-width:1000px; max-height:90vh; background:var(--panel-solid); border:1px solid var(--border-bright); border-radius:16px; overflow:hidden; cursor:default;" onclick="event.stopPropagation()">
+      <div style="padding:14px 20px; border-bottom:1px solid var(--border); font-family:var(--mono); font-size:12px; color:var(--cyan);">${new Date(e.ts).toLocaleString()}</div>
+      ${b64 ? `<img src="data:image/jpeg;base64,${b64}" style="max-width:100%; max-height:65vh; display:block; margin:0 auto;" />` : ''}
+      <div style="padding:16px 20px; color:var(--text); font-size:13px; line-height:1.7;">${e.text || 'No OCR text'}</div>
+    </div>`;
+  m.onclick = () => m.remove();
+  document.body.appendChild(m);
+}
+
+const recallSearch = document.getElementById('recall-search');
+recallSearch?.addEventListener('input', async () => {
+  recallTab.results = await api.visionSearch(recallSearch.value);
+  recallTab.render();
+});
+
+const visionToggle = document.getElementById('vision-toggle');
+visionToggle?.addEventListener('change', async () => {
+  if (visionToggle.checked) {
+    await api.visionStart(90);
+    await api.storeSet('settings', 'visionMemoryEnabled', true);
+  } else {
+    await api.visionStop();
+    await api.storeSet('settings', 'visionMemoryEnabled', false);
+  }
+});
+
+document.getElementById('open-agent-btn')?.addEventListener('click', () => api.openAgent());
 
 // ═══════════════════════════════════════════════════════════════════
 // BOOT

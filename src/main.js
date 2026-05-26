@@ -2,12 +2,14 @@ const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeI
 const path = require('path');
 const automation = require('./automation');
 const store = require('./store');
+const visionMemory = require('./vision-memory');
 
 let mainWindow = null;
 let dashboardWindow = null;
 let askWindow = null;
 let regionWindow = null;
 let clipsWindow = null;
+let agentWindow = null;
 let tray = null;
 let isVisible = false;
 
@@ -217,6 +219,33 @@ function startClipboardWatcher() {
     } catch {}
   }, 1500);
 }
+// ───── Agent Console ────────────────────────────────────────────────────────
+function openAgent() {
+  if (agentWindow && !agentWindow.isDestroyed()) { agentWindow.focus(); return; }
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  agentWindow = new BrowserWindow({
+    width: Math.min(1180, width - 80),
+    height: Math.min(740, height - 80),
+    x: Math.floor((width - 1180) / 2),
+    y: 60,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: false,
+    show: false,
+    hasShadow: true,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: false,
+    },
+  });
+  agentWindow.loadFile(path.join(__dirname, 'renderer', 'agent.html'));
+  agentWindow.once('ready-to-show', () => agentWindow.show());
+  agentWindow.on('closed', () => { agentWindow = null; });
+}
+
 function quickLabel(t) {
   if (/^https?:\/\//.test(t)) return 'URL';
   if (/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(t.trim())) return 'Email';
@@ -244,11 +273,13 @@ function createTray(shortcutLabel) {
 
   const contextMenu = Menu.buildFromTemplate([
     { label: `Toggle Aura (${shortcutLabel})`, click: () => toggleAssistant() },
-    { label: 'Ask Aura (Ctrl+Shift+A)', click: () => openAsk() },
-    { label: 'Region screenshot (Ctrl+Shift+S)', click: () => openRegionSelector() },
-    { label: 'Clipboard history (Ctrl+Shift+V)', click: () => openClips() },
     { type: 'separator' },
-    { label: 'Open Command Center', click: () => createDashboard() },
+    { label: '🤖  Agent Console (Ctrl+Shift+Q)', click: () => openAgent() },
+    { label: '💬  Ask Aura (Ctrl+Shift+A)', click: () => openAsk() },
+    { label: '📸  Region screenshot (Ctrl+Shift+S)', click: () => openRegionSelector() },
+    { label: '📋  Clipboard history (Ctrl+Shift+V)', click: () => openClips() },
+    { type: 'separator' },
+    { label: '⌘  Command Center', click: () => createDashboard() },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
@@ -301,6 +332,11 @@ app.whenReady().then(() => {
   globalShortcut.register('Control+Shift+A', () => openAsk());
   globalShortcut.register('Control+Shift+S', () => openRegionSelector());
   globalShortcut.register('Control+Shift+V', () => openClips());
+  globalShortcut.register('Control+Shift+Q', () => openAgent());
+
+  // Auto-start vision memory if user enabled it previously
+  const visionPref = store.get('settings', 'visionMemoryEnabled');
+  if (visionPref) visionMemory.start(store.get('settings', 'visionMemoryInterval') || 90);
   globalShortcut.register('Control+Shift+E', async () => {
     // "Ask about selection" — simulate Ctrl+C to grab selection, then open ask with it
     const before = clipboard.readText();
@@ -330,10 +366,21 @@ ipcMain.on('resize-collapsed', () => collapseWindow());
 
 ipcMain.on('open-dashboard',  () => createDashboard());
 ipcMain.on('close-dashboard', () => dashboardWindow && dashboardWindow.close());
+ipcMain.on('open-ask',        () => openAsk());
 ipcMain.on('close-ask',       () => askWindow && askWindow.close());
 ipcMain.on('close-clips',     () => clipsWindow && clipsWindow.close());
 ipcMain.on('cancel-region',   () => regionWindow && regionWindow.close());
 ipcMain.on('capture-region',  (_e, rect) => captureRegion(rect));
+ipcMain.on('open-agent',      () => openAgent());
+ipcMain.on('close-agent',     () => agentWindow && agentWindow.close());
+ipcMain.handle('minimize-agent', () => agentWindow && agentWindow.minimize());
+
+// Vision Memory IPC
+ipcMain.handle('vision-start',  (_e, sec) => { visionMemory.start(sec || 90); return true; });
+ipcMain.handle('vision-stop',   () => { visionMemory.stop(); return true; });
+ipcMain.handle('vision-status', () => ({ enabled: visionMemory.isEnabled() }));
+ipcMain.handle('vision-search', (_e, q) => visionMemory.search(q));
+ipcMain.handle('vision-image',  (_e, fp) => visionMemory.readImageB64(fp));
 ipcMain.handle('minimize-dashboard', () => dashboardWindow && dashboardWindow.minimize());
 ipcMain.handle('maximize-dashboard', () => {
   if (!dashboardWindow) return;

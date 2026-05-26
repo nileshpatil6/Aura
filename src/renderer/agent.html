@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob: fonts.googleapis.com fonts.gstatic.com;" />
+<title>Aura Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@500;700;900&display=swap">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, sans-serif; }
+  html, body { background: transparent; height: 100%; overflow: hidden; -webkit-font-smoothing: antialiased; user-select: none; color: #e6f0ff; }
+
+  :root {
+    --bg: rgba(8, 12, 22, 0.92);
+    --cyan: #00d9ff;
+    --purple: #a855f7;
+    --green: #00ff9d;
+    --red: #ff3b6b;
+    --orange: #ffaa00;
+    --border: rgba(0, 217, 255, 0.18);
+    --border-bright: rgba(0, 217, 255, 0.38);
+    --mono: 'JetBrains Mono', monospace;
+    --display: 'Orbitron', sans-serif;
+  }
+
+  .shell {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    backdrop-filter: blur(40px) saturate(2);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: 0 30px 90px rgba(0,0,0,0.8), 0 0 60px rgba(0,217,255,0.12);
+    display: grid;
+    grid-template-rows: 56px 1fr;
+    overflow: hidden;
+  }
+
+  /* Animated grid bg */
+  .shell::before {
+    content: ''; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(0,217,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,217,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    mask-image: radial-gradient(ellipse at center, black 0%, transparent 80%);
+  }
+
+  .titlebar {
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,0,0,0.3);
+    -webkit-app-region: drag;
+    position: relative;
+    z-index: 2;
+  }
+
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-orb {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, #00d9ff, #a855f7, #00d9ff);
+    box-shadow: 0 0 16px rgba(0,217,255,0.5);
+    animation: spin 4s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .brand-text {
+    font-family: var(--display);
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.3em;
+    background: linear-gradient(90deg, #fff, var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .brand-sub {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: rgba(150,170,200,0.5);
+    margin-left: 12px;
+  }
+
+  .status-pill {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 14px 5px 12px;
+    background: rgba(0,217,255,0.08);
+    border: 1px solid var(--border-bright);
+    border-radius: 100px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    color: var(--cyan);
+  }
+  .status-pill .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan);
+  }
+  .status-pill.running { color: var(--orange); border-color: rgba(255,170,0,0.4); background: rgba(255,170,0,0.08); }
+  .status-pill.running .dot { background: var(--orange); box-shadow: 0 0 8px var(--orange); animation: pulse 0.8s ease-in-out infinite; }
+  .status-pill.done    { color: var(--green); border-color: rgba(0,255,157,0.4); background: rgba(0,255,157,0.08); }
+  .status-pill.done    .dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .status-pill.error   { color: var(--red); border-color: rgba(255,59,107,0.4); background: rgba(255,59,107,0.08); }
+  .status-pill.error   .dot { background: var(--red); }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } }
+
+  .wc { display: flex; -webkit-app-region: no-drag; margin-left: 16px; }
+  .wc button { width: 32px; height: 32px; color: rgba(150,170,200,0.6); background: transparent; border: none; border-radius: 6px; cursor: pointer; }
+  .wc button:hover { background: rgba(255,255,255,0.06); color: white; }
+  .wc .close:hover { background: rgba(255,59,107,0.6); }
+
+  /* Layout */
+  .body {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+  }
+
+  /* Left: input + plan + log */
+  .left {
+    padding: 24px 26px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .goal-box {
+    background: rgba(10, 14, 24, 0.6);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+  }
+  .goal-box label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--cyan);
+    text-transform: uppercase;
+  }
+  #goal {
+    width: 100%;
+    margin-top: 10px;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: white;
+    font-size: 17px;
+    font-family: 'Inter', sans-serif;
+    resize: none;
+    min-height: 36px;
+  }
+  #goal::placeholder { color: rgba(150,170,200,0.35); }
+
+  .examples {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+  .example {
+    padding: 5px 12px;
+    background: rgba(168, 85, 247, 0.08);
+    border: 1px solid rgba(168, 85, 247, 0.22);
+    color: rgba(220, 200, 250, 0.9);
+    font-size: 11px;
+    border-radius: 100px;
+    cursor: pointer;
+    transition: all 0.18s;
+  }
+  .example:hover { background: rgba(168, 85, 247, 0.18); border-color: rgba(168, 85, 247, 0.45); }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .btn-go {
+    flex: 1;
+    padding: 13px 22px;
+    background: linear-gradient(135deg, var(--cyan), var(--purple));
+    color: white;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    box-shadow: 0 6px 24px rgba(0, 217, 255, 0.3);
+    transition: all 0.2s;
+  }
+  .btn-go:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(0, 217, 255, 0.5); }
+  .btn-go:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-stop {
+    padding: 13px 22px;
+    background: rgba(255, 59, 107, 0.12);
+    border: 1px solid rgba(255, 59, 107, 0.35);
+    color: var(--red);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-stop:hover { background: rgba(255, 59, 107, 0.25); }
+
+  /* Plan/steps */
+  .plan-h {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: rgba(150,170,200,0.6);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .step {
+    display: grid;
+    grid-template-columns: 28px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: rgba(10, 14, 24, 0.55);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 13px;
+    transition: all 0.25s;
+  }
+  .step .num {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: rgba(0, 217, 255, 0.1);
+    border: 1px solid var(--border);
+    color: var(--cyan);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .step .desc { color: rgba(230, 240, 255, 0.85); }
+  .step .stat { font-family: var(--mono); font-size: 10px; color: rgba(150,170,200,0.5); }
+  .step.active { background: rgba(255, 170, 0, 0.08); border-color: rgba(255, 170, 0, 0.4); }
+  .step.active .num { background: rgba(255, 170, 0, 0.2); border-color: rgba(255, 170, 0, 0.5); color: var(--orange); animation: pulse 1s infinite; }
+  .step.done { border-color: rgba(0, 255, 157, 0.25); }
+  .step.done .num { background: rgba(0, 255, 157, 0.18); color: var(--green); border-color: rgba(0, 255, 157, 0.5); }
+  .step.done .num::before { content: '✓'; }
+  .step.done .num { font-size: 12px; }
+  .step.fail { border-color: rgba(255, 59, 107, 0.3); }
+  .step.fail .num { background: rgba(255, 59, 107, 0.18); color: var(--red); }
+
+  /* Log */
+  .log {
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: rgba(180, 200, 220, 0.8);
+    max-height: 180px;
+    overflow-y: auto;
+    line-height: 1.7;
+  }
+  .log .ts { color: rgba(0,217,255,0.5); margin-right: 6px; }
+
+  /* Right: live preview */
+  .right {
+    padding: 24px 22px;
+    border-left: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+  }
+  .right-h {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: rgba(150,170,200,0.6);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .frame {
+    background: rgba(10, 14, 24, 0.6);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px;
+    overflow: hidden;
+  }
+  .frame img {
+    width: 100%;
+    border-radius: 6px;
+    display: block;
+    border: 1px solid rgba(0,217,255,0.1);
+  }
+  .frame-meta {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: rgba(150,170,200,0.5);
+    margin-top: 6px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,217,255,0.25); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="titlebar">
+    <div class="brand">
+      <div class="brand-orb"></div>
+      <div>
+        <div class="brand-text">AGENT</div>
+      </div>
+      <div class="brand-sub">autonomous mode</div>
+    </div>
+    <div class="status-pill" id="status-pill">
+      <span class="dot"></span><span id="status-label">IDLE</span>
+    </div>
+    <div class="wc">
+      <button id="min-btn" title="Minimize">─</button>
+      <button class="close" id="close-btn" title="Close">✕</button>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="left">
+      <div class="goal-box">
+        <label>Your goal · Aura will plan & execute autonomously</label>
+        <textarea id="goal" rows="2" placeholder="e.g. Open Chrome, search for cheapest flight to Goa next weekend, screenshot the results"></textarea>
+        <div class="examples">
+          <button class="example">Order coffee filters on Amazon</button>
+          <button class="example">Find a restaurant in Bangalore open now, book a table for 2</button>
+          <button class="example">Open Gmail, find latest email from boss, draft a reply</button>
+          <button class="example">Open Spotify, play Lofi study playlist</button>
+          <button class="example">Check weather in Mumbai tomorrow</button>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="btn-go" id="run-btn">▶  Run autonomously</button>
+        <button class="btn-stop" id="stop-btn" style="display:none">■  Stop</button>
+      </div>
+
+      <div>
+        <div class="plan-h">Execution Steps</div>
+        <div class="steps" id="steps"></div>
+      </div>
+
+      <div>
+        <div class="plan-h">Live Log</div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="right-h">Current screen</div>
+      <div class="frame">
+        <img id="preview-img" src="" style="display:none" />
+        <div id="no-preview" style="padding:40px 10px; text-align:center; color:rgba(150,170,200,0.4); font-size:11px; font-family:var(--mono)">No screenshot yet</div>
+        <div class="frame-meta">
+          <span id="step-label">—</span>
+          <span id="step-time">—</span>
+        </div>
+      </div>
+      <div class="right-h">Recent actions</div>
+      <div id="action-feed" style="display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
+  </div>
+</div>
+
+<script src="computer-use.js"></script>
+<script>
+const api = window.electronAPI;
+let aborted = false;
+let running = false;
+
+document.getElementById('close-btn').onclick = () => api.closeAgent?.();
+document.getElementById('min-btn').onclick = () => api.minimizeAgent?.();
+document.getElementById('stop-btn').onclick = () => { aborted = true; setStatus('STOPPING', 'error'); };
+
+document.querySelectorAll('.example').forEach(b => {
+  b.onclick = () => { document.getElementById('goal').value = b.textContent; };
+});
+
+function setStatus(label, mode) {
+  document.getElementById('status-label').textContent = label;
+  const pill = document.getElementById('status-pill');
+  pill.classList.remove('running', 'done', 'error');
+  if (mode) pill.classList.add(mode);
+}
+
+function log(msg) {
+  const div = document.createElement('div');
+  div.innerHTML = `<span class="ts">${new Date().toTimeString().slice(0,8)}</span>${msg}`;
+  const el = document.getElementById('log');
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderSteps(plan, currentIdx = -1, status = {}) {
+  const stepsEl = document.getElementById('steps');
+  stepsEl.innerHTML = '';
+  plan.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = 'step';
+    if (i === currentIdx) div.classList.add('active');
+    if (status[i] === 'done') div.classList.add('done');
+    if (status[i] === 'fail') div.classList.add('fail');
+    div.innerHTML = `
+      <div class="num">${status[i] === 'done' ? '' : (i + 1)}</div>
+      <div class="desc">${p}</div>
+      <div class="stat">${status[i] || ''}</div>`;
+    stepsEl.appendChild(div);
+  });
+}
+
+function addAction(text, ok = true) {
+  const feed = document.getElementById('action-feed');
+  const div = document.createElement('div');
+  div.style.cssText = `padding:8px 12px; background:rgba(${ok?'0,217,255':'255,59,107'},0.08); border:1px solid rgba(${ok?'0,217,255':'255,59,107'},0.2); border-radius:8px; font-family:var(--mono); font-size:10px; color:rgba(${ok?'180,220,250':'255,180,200'},0.9);`;
+  div.textContent = text;
+  feed.insertBefore(div, feed.firstChild);
+  while (feed.children.length > 8) feed.removeChild(feed.lastChild);
+}
+
+async function callGemini(apiKey, contents, tools = null, systemText = null) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const body = { contents, generationConfig: { temperature: 0.2 } };
+  if (systemText) body.systemInstruction = { parts: [{ text: systemText }] };
+  if (tools) body.tools = tools;
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0,200)}`);
+  return r.json();
+}
+
+async function planTask(apiKey, goal) {
+  log('Planning steps…');
+  const sys = `You are a Windows desktop automation planner. Break the user's goal into 3-8 concrete, atomic steps an AI agent can execute by clicking/typing on the screen and running PowerShell. Return ONLY a JSON array of step strings, no markdown, no extra text. Each step should be specific and actionable.
+
+Example goal: "Order coffee filters on Amazon"
+Example output: ["Open Chrome browser", "Navigate to amazon.in", "Click the search bar and search 'coffee filters'", "Click the first relevant result", "Click Add to Cart", "Click Proceed to checkout"]`;
+  const resp = await callGemini(apiKey, [{ role: 'user', parts: [{ text: `Goal: ${goal}\n\nReturn a JSON array of steps.` }] }], null, sys);
+  const txt = resp.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+  // Strip markdown fences if present
+  const clean = txt.replace(/```json\s*|\s*```/g, '').trim();
+  try { return JSON.parse(clean); } catch { return [goal]; }
+}
+
+async function executeStep(apiKey, step) {
+  // Use Computer Use specialist for UI steps, direct tools for shell steps
+  const lower = step.toLowerCase();
+
+  // App opening shortcut
+  const openMatch = lower.match(/^(open|launch|start)\s+(?:the\s+)?(\w+(?:\s+\w+)?)/);
+  if (openMatch) {
+    addAction(`open: ${openMatch[2]}`);
+    const r = await api.openApp(openMatch[2]);
+    await new Promise(r => setTimeout(r, 1500));
+    return { ok: true, output: r.output };
+  }
+
+  // Defer to Computer Use specialist for everything else
+  const agent = new window.ComputerUseAgent({
+    onStep: (s) => addAction(`${s.action || s.summary || JSON.stringify(s)}`.slice(0, 80)),
+    onLog: (m) => log(m),
+  });
+  // Update preview after each action via screenshot
+  try {
+    const summary = await agent.run({ apiKey, goal: step, maxSteps: 8 });
+    // Capture final screenshot for the preview
+    const b64 = await api.takeScreenshot();
+    if (b64) showPreview(b64, step);
+    return { ok: true, output: summary };
+  } catch (err) {
+    return { ok: false, output: err.message };
+  }
+}
+
+function showPreview(b64, label) {
+  const img = document.getElementById('preview-img');
+  img.src = `data:image/jpeg;base64,${b64}`;
+  img.style.display = 'block';
+  document.getElementById('no-preview').style.display = 'none';
+  document.getElementById('step-label').textContent = label?.slice(0, 50) || '—';
+  document.getElementById('step-time').textContent = new Date().toTimeString().slice(0,8);
+}
+
+document.getElementById('run-btn').onclick = async () => {
+  if (running) return;
+  const goal = document.getElementById('goal').value.trim();
+  if (!goal) return;
+  running = true; aborted = false;
+  document.getElementById('run-btn').style.display = 'none';
+  document.getElementById('stop-btn').style.display = 'block';
+  document.getElementById('action-feed').innerHTML = '';
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('steps').innerHTML = '';
+
+  setStatus('PLANNING', 'running');
+  try {
+    const apiKey = await api.storeGet('settings', 'apiKey');
+    if (!apiKey) throw new Error('No API key. Open dashboard settings.');
+
+    const plan = await planTask(apiKey, goal);
+    log(`Plan generated: ${plan.length} steps`);
+    const status = {};
+    renderSteps(plan, -1, status);
+
+    await api.storePush('activity', { kind: 'command', summary: `Agent task: ${goal}` });
+
+    setStatus('RUNNING', 'running');
+    for (let i = 0; i < plan.length; i++) {
+      if (aborted) break;
+      renderSteps(plan, i, status);
+      log(`▶ Step ${i+1}: ${plan[i]}`);
+      const r = await executeStep(apiKey, plan[i]);
+      status[i] = r.ok ? 'done' : 'fail';
+      log(r.ok ? `  ✓ ${r.output?.slice(0,80) || ''}` : `  ✗ ${r.output}`);
+      renderSteps(plan, i, status);
+      if (!r.ok) break;
+    }
+    if (aborted) {
+      setStatus('STOPPED', 'error');
+      log('Stopped by user.');
+    } else if (Object.values(status).every(s => s === 'done')) {
+      setStatus('COMPLETE', 'done');
+      log('All steps completed.');
+    } else {
+      setStatus('PARTIAL', 'error');
+    }
+  } catch (err) {
+    setStatus('ERROR', 'error');
+    log(`Error: ${err.message}`);
+  }
+  running = false;
+  document.getElementById('run-btn').style.display = 'block';
+  document.getElementById('stop-btn').style.display = 'none';
+};
+</script>
+</body>
+</html>

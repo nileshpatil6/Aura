@@ -49,11 +49,22 @@ To change the key later: open Aura and click the ⚙ button in the footer.
 | Action | Shortcut |
 |--------|----------|
 | Open Aura voice assistant | `Alt+Space` |
-| Ask Aura anything (Spotlight) | `Ctrl+Shift+A` |
-| Region screenshot → ask | `Ctrl+Shift+S` |
+| 🤖 Agent Console (autonomous mode) | `Ctrl+Shift+Q` |
+| 💬 Ask Aura anything (Spotlight) | `Ctrl+Shift+A` |
+| 📸 Region screenshot → ask | `Ctrl+Shift+S` |
 | Ask about selected text | `Ctrl+Shift+E` |
-| Clipboard history | `Ctrl+Shift+V` |
-| Open Command Center | tray menu / pill ⚙ button |
+| 📋 Clipboard history | `Ctrl+Shift+V` |
+| Command Center | tray menu / pill ⚙ button |
+
+## The viral features
+
+**🤖 Agent Mode** — Type "Order coffee filters on Amazon" or "Apply to 5 frontend jobs on LinkedIn". Aura plans the steps, then *autonomously executes* them. Live progress, step-by-step screenshots, pause/cancel.
+
+**📸 Photographic Memory** — Toggle ON in the Recall tab. Aura screenshots your screen every 90s in the background, OCRs everything, and lets you search. "Find that document I was reading about budgets last Tuesday" — instant.
+
+**💬 Ask Anywhere** — `Ctrl+Shift+A` over ANY app. Spotlight-style. Type → answer. Works in Chrome, Word, IDE, anywhere.
+
+**📸 Region Ask** — `Ctrl+Shift+S` to drag a region. Foreign text? Cryptic error? Confusing chart? Drag it, ask anything.
 
 ### Example commands
 

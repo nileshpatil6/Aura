@@ -568,6 +568,16 @@ body {
   color: white;
 }
 .chip:active { transform: scale(0.94); }
+.chip-pro {
+  background: linear-gradient(135deg, rgba(0,217,255,0.18), rgba(168,85,247,0.18));
+  border-color: rgba(0,217,255,0.35);
+  color: white;
+}
+.chip-pro:hover {
+  background: linear-gradient(135deg, rgba(0,217,255,0.32), rgba(168,85,247,0.32));
+  border-color: rgba(0,217,255,0.55);
+  box-shadow: 0 0 12px rgba(0,217,255,0.4);
+}
 
 /* ══════════════════════════════════════════════
    SETTINGS OVERLAY
