@@ -6,7 +6,7 @@ const CU_MODEL = 'gemini-2.5-computer-use-preview-10-2025';
 const CU_ENDPOINT = (key) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${CU_MODEL}:generateContent?key=${key}`;
 
-const SYSTEM_PROMPT = `You are Aura's precision computer-use specialist operating a Windows 11 desktop UI.
+const CU_SYSTEM_PROMPT = `You are Aura's precision computer-use specialist operating a Windows 11 desktop UI.
 
 YOUR JOB: given a screenshot + a goal, decide the SINGLE next UI action that makes progress toward the goal. Return exactly one function call.
 
@@ -98,7 +98,7 @@ class ComputerUseAgent {
       });
 
       const body = {
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        systemInstruction: { parts: [{ text: CU_SYSTEM_PROMPT }] },
         contents,
         tools: this._buildTools(),
         generationConfig: { temperature: 0.1, maxOutputTokens: 256 },

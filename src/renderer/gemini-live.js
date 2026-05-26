@@ -1,3 +1,4 @@
+console.log('[Aura] gemini-live.js: parse start');
 const WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 const MODEL = 'models/gemini-2.5-flash-native-audio-latest';
 const INPUT_SAMPLE_RATE = 16000;
@@ -317,10 +318,17 @@ class GeminiLive {
 
   async connect() {
     if (this.connected) return;
+    console.log('[Aura] connect() called');
     // Prefer electron-store (shared with dashboard), fall back to localStorage
     let apiKey = '';
-    try { apiKey = await window.electronAPI?.storeGet('settings', 'apiKey') || ''; } catch {}
-    if (!apiKey) apiKey = localStorage.getItem('gemini_api_key') || '';
+    try {
+      apiKey = await window.electronAPI?.storeGet('settings', 'apiKey') || '';
+      console.log('[Aura] storeGet settings.apiKey:', apiKey ? `(${apiKey.length} chars, starts ${apiKey.slice(0,6)}…)` : '(empty)');
+    } catch (e) { console.warn('[Aura] storeGet failed:', e); }
+    if (!apiKey) {
+      apiKey = localStorage.getItem('gemini_api_key') || '';
+      console.log('[Aura] fallback localStorage gemini_api_key:', apiKey ? '(found)' : '(empty)');
+    }
     if (!apiKey) throw new Error('NO_API_KEY');
     // Pull voice preference too
     let voice = 'Aoede';
@@ -344,6 +352,8 @@ class GeminiLive {
       if (extra.length) personalPrompt += '\n\n' + extra.join('\n\n');
     } catch {}
 
+    console.log('[Aura] Opening WS to', WS_BASE);
+    console.log('[Aura] Using model:', MODEL);
     const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
     this.ws = ws;
 
@@ -352,17 +362,20 @@ class GeminiLive {
       this._setupResolve = resolve;
       this._setupReject = reject;
     });
-    // Safety: don't hang forever
+    // Safety: don't hang forever — surface as a visible error
     const setupTimeout = setTimeout(() => {
       if (this._setupReject) {
-        this._setupReject(new Error('Setup timeout — model may be unavailable or API key invalid'));
+        const readyState = ws.readyState;
+        const stateMap = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+        const msg = `Setup timeout (8s). WS state: ${stateMap[readyState] || readyState}. Likely cause: invalid key, model rejected, or firewall.`;
+        console.error('[Aura]', msg);
+        this._setupReject(new Error(msg));
         this._setupReject = null; this._setupResolve = null;
       }
-    }, 12000);
+    }, 8000);
 
     ws.onopen = () => {
-      console.log('WS open, sending setup...');
-      ws.send(JSON.stringify({
+      const setupMsg = {
         setup: {
           model: MODEL,
           generationConfig: {
@@ -378,7 +391,9 @@ class GeminiLive {
           },
           tools: TOOLS,
         },
-      }));
+      };
+      console.log('[Aura] WS opened. Sending setup:', JSON.stringify(setupMsg).slice(0, 400) + '…');
+      ws.send(JSON.stringify(setupMsg));
     };
 
     ws.onmessage = async (event) => {
@@ -391,6 +406,7 @@ class GeminiLive {
 
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
+      console.log('[Aura] WS recv:', JSON.stringify(msg).slice(0, 300));
 
       if (msg.error) {
         this.callbacks.onError(`Gemini error: ${msg.error.message || JSON.stringify(msg.error)}`);
@@ -438,14 +454,14 @@ class GeminiLive {
     };
 
     ws.onerror = (e) => {
-      console.error('WS error:', e);
+      console.error('[Aura] WS error event:', e);
       this.callbacks.onError('Connection error — check API key and internet.');
       this.connected = false;
       if (this._setupReject) { this._setupReject(new Error('WS error')); this._setupReject = null; this._setupResolve = null; }
     };
 
     ws.onclose = (event) => {
-      console.warn('WS closed:', event.code, event.reason);
+      console.warn('[Aura] WS closed. code:', event.code, 'reason:', event.reason || '(none)', 'wasClean:', event.wasClean);
       this.connected = false;
       if (event.code !== 1000 && event.code !== 1001) {
         this.callbacks.onError(`Disconnected (${event.code}): ${event.reason || 'Check API key or network.'}`);
@@ -656,3 +672,4 @@ class GeminiLive {
 }
 
 window.GeminiLive = GeminiLive;
+console.log('[Aura] gemini-live.js: registered window.GeminiLive');

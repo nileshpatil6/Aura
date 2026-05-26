@@ -48,7 +48,8 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  if (process.env.NODE_ENV === 'development') {
+  // Always open DevTools when run via `npm start` (no app.isPackaged === unpacked dev)
+  if (!app.isPackaged) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
