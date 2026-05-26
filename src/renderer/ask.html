@@ -253,14 +253,18 @@
           parts.unshift({ inlineData: { mimeType: 'image/jpeg', data: imageB64 } });
         }
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: sys.join('\n\n') }] },
             contents: [{ role: 'user', parts }],
-            generationConfig: { temperature: 0.5, maxOutputTokens: 1024 },
+            generationConfig: {
+              temperature: 0.5,
+              maxOutputTokens: 1024,
+              thinkingConfig: { thinkingBudget: 0 },
+            },
           }),
         });
         if (!res.ok) {
