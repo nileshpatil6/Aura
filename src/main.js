@@ -62,17 +62,23 @@ function createWindow() {
 
 function createDashboard() {
   if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+    if (dashboardWindow.isMinimized()) dashboardWindow.restore();
+    dashboardWindow.show();
     dashboardWindow.focus();
     return;
   }
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const w = Math.min(1280, width - 80);
+  const h = Math.min(820, height - 80);
   dashboardWindow = new BrowserWindow({
-    width: Math.min(1280, width - 80),
-    height: Math.min(820, height - 80),
+    width: w,
+    height: h,
+    x: Math.floor((width - w) / 2),
+    y: Math.floor((height - h) / 2),
     minWidth: 1000,
     minHeight: 640,
     frame: false,
-    show: false,
+    show: true,
     backgroundColor: '#050811',
     title: 'Aura · Command Center',
     webPreferences: {
@@ -83,8 +89,8 @@ function createDashboard() {
     },
   });
   dashboardWindow.loadFile(path.join(__dirname, 'renderer', 'dashboard.html'));
-  dashboardWindow.once('ready-to-show', () => dashboardWindow.show());
   dashboardWindow.on('closed', () => { dashboardWindow = null; });
+  dashboardWindow.focus();
 }
 
 // ───── Ask Anywhere ─────────────────────────────────────────────────────────
@@ -111,11 +117,13 @@ function openAsk(context) {
     },
   });
   askWindow.loadFile(path.join(__dirname, 'renderer', 'ask.html'));
-  askWindow.once('ready-to-show', () => {
-    askWindow.show();
-    askWindow.focus();
-    if (context) askWindow.webContents.send('ask-context', context);
-  });
+  askWindow.show();
+  askWindow.focus();
+  if (context) {
+    askWindow.webContents.once('did-finish-load', () => {
+      askWindow.webContents.send('ask-context', context);
+    });
+  }
   askWindow.on('blur', () => askWindow && !askWindow.isDestroyed() && askWindow.close());
   askWindow.on('closed', () => { askWindow = null; });
 }
@@ -197,7 +205,8 @@ function openClips() {
     },
   });
   clipsWindow.loadFile(path.join(__dirname, 'renderer', 'clips.html'));
-  clipsWindow.once('ready-to-show', () => { clipsWindow.show(); clipsWindow.focus(); });
+  clipsWindow.show();
+  clipsWindow.focus();
   clipsWindow.on('blur', () => clipsWindow && !clipsWindow.isDestroyed() && clipsWindow.close());
   clipsWindow.on('closed', () => { clipsWindow = null; });
 }
@@ -233,19 +242,23 @@ function openAgentWithGoal(goal) {
 }
 
 function openAgent() {
-  if (agentWindow && !agentWindow.isDestroyed()) { agentWindow.focus(); return; }
+  if (agentWindow && !agentWindow.isDestroyed()) {
+    if (agentWindow.isMinimized()) agentWindow.restore();
+    agentWindow.show();
+    agentWindow.focus();
+    return;
+  }
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const w = Math.min(1180, width - 80);
+  const h = Math.min(740, height - 80);
   agentWindow = new BrowserWindow({
-    width: Math.min(1180, width - 80),
-    height: Math.min(740, height - 80),
-    x: Math.floor((width - 1180) / 2),
-    y: 60,
+    width: w,
+    height: h,
+    x: Math.floor((width - w) / 2),
+    y: Math.max(40, Math.floor((height - h) / 2)),
     frame: false,
-    transparent: true,
-    alwaysOnTop: false,
-    show: false,
-    hasShadow: true,
-    backgroundColor: '#00000000',
+    show: true,
+    backgroundColor: '#050811',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -254,8 +267,8 @@ function openAgent() {
     },
   });
   agentWindow.loadFile(path.join(__dirname, 'renderer', 'agent.html'));
-  agentWindow.once('ready-to-show', () => agentWindow.show());
   agentWindow.on('closed', () => { agentWindow = null; });
+  agentWindow.focus();
 }
 
 function quickLabel(t) {
@@ -363,6 +376,21 @@ app.whenReady().then(() => {
   });
 
   startClipboardWatcher();
+
+  // First-run welcome: open dashboard so users see the actual interface
+  const isFirstRun = !store.get('settings', 'launchedOnce');
+  if (isFirstRun) {
+    store.set('settings', 'launchedOnce', true);
+    setTimeout(() => createDashboard(), 600);
+  } else {
+    // Subsequent launches: show tray balloon notification (Windows only)
+    try {
+      tray?.displayBalloon?.({
+        title: 'Aura is running',
+        content: `Click the pill at top of screen, press ${registered || 'Alt+Space'} to talk, or Ctrl+Shift+Q for Agent mode.`,
+      });
+    } catch {}
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
