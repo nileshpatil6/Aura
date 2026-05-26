@@ -337,6 +337,23 @@ function collapseWindow() {
   mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
 }
 
+// Single-instance lock — second launch focuses the running app instead of starting a new copy
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    // Surface the dashboard if not visible, otherwise toggle the pill
+    if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+      if (dashboardWindow.isMinimized()) dashboardWindow.restore();
+      dashboardWindow.show();
+      dashboardWindow.focus();
+    } else {
+      createDashboard();
+    }
+  });
+}
+
 app.whenReady().then(() => {
   createWindow();
 
