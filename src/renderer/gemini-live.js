@@ -347,6 +347,19 @@ class GeminiLive {
     const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
     this.ws = ws;
 
+    // Promise that resolves when the setup-complete message arrives
+    const setupPromise = new Promise((resolve, reject) => {
+      this._setupResolve = resolve;
+      this._setupReject = reject;
+    });
+    // Safety: don't hang forever
+    const setupTimeout = setTimeout(() => {
+      if (this._setupReject) {
+        this._setupReject(new Error('Setup timeout — model may be unavailable or API key invalid'));
+        this._setupReject = null; this._setupResolve = null;
+      }
+    }, 12000);
+
     ws.onopen = () => {
       console.log('WS open, sending setup...');
       ws.send(JSON.stringify({
@@ -381,6 +394,7 @@ class GeminiLive {
 
       if (msg.error) {
         this.callbacks.onError(`Gemini error: ${msg.error.message || JSON.stringify(msg.error)}`);
+        if (this._setupReject) { this._setupReject(new Error(msg.error.message || 'setup failed')); this._setupReject = null; this._setupResolve = null; }
         return;
       }
 
@@ -390,6 +404,7 @@ class GeminiLive {
         this.callbacks.onStateChange('listening');
         await this.startRecording();
         this.callbacks.onReady?.();
+        if (this._setupResolve) { this._setupResolve(); this._setupResolve = null; this._setupReject = null; }
         return;
       }
 
@@ -424,8 +439,9 @@ class GeminiLive {
 
     ws.onerror = (e) => {
       console.error('WS error:', e);
-      this.callbacks.onError('Connection error. Check API key and internet.');
+      this.callbacks.onError('Connection error — check API key and internet.');
       this.connected = false;
+      if (this._setupReject) { this._setupReject(new Error('WS error')); this._setupReject = null; this._setupResolve = null; }
     };
 
     ws.onclose = (event) => {
@@ -434,7 +450,18 @@ class GeminiLive {
       if (event.code !== 1000 && event.code !== 1001) {
         this.callbacks.onError(`Disconnected (${event.code}): ${event.reason || 'Check API key or network.'}`);
       }
+      if (this._setupReject) {
+        this._setupReject(new Error(`Closed (${event.code}): ${event.reason || 'see console'}`));
+        this._setupReject = null; this._setupResolve = null;
+      }
     };
+
+    // Wait for setupComplete before returning from connect()
+    try {
+      await setupPromise;
+    } finally {
+      clearTimeout(setupTimeout);
+    }
   }
 
   async _dispatchTool(call) {

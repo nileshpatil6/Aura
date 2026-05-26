@@ -62,18 +62,21 @@ let showingInput   = false;
 let transcriptText = '';
 
 // ──── Icon paths per state ─────────────────────────────────────────────────────
+const MIC_PATH = 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z';
 const ICONS = {
-  idle:      'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z',
-  listening: 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z',
-  thinking:  'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z',
-  speaking:  'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z',
+  idle:       MIC_PATH,
+  connecting: MIC_PATH,
+  listening:  MIC_PATH,
+  thinking:   'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z',
+  speaking:   'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77z',
 };
 
 const STATUS_LABELS = {
-  idle:      'READY',
-  listening: 'LISTENING',
-  thinking:  'THINKING',
-  speaking:  'SPEAKING',
+  idle:       'IDLE',
+  connecting: 'CONNECTING',
+  listening:  'LISTENING',
+  thinking:   'THINKING',
+  speaking:   'SPEAKING',
 };
 
 // ──── Set state ────────────────────────────────────────────────────────────────
@@ -180,34 +183,45 @@ async function openAssistant() {
 
   window.electronAPI?.resizeExpanded();
 
-  // No key saved — direct user to the dashboard to set one
+  await ensureConnected();
+}
+
+// Connect (or reconnect) the live API on demand. Surfaces errors visibly.
+async function ensureConnected() {
+  if (gemini && gemini.connected) return true;
+
   if (!(await hasApiKey())) {
-    showError('No Gemini API key set. Opening Settings…');
-    setTimeout(() => window.electronAPI?.openDashboard(), 400);
-    return;
+    showError('No Gemini API key set — opening dashboard.');
+    setState('idle');
+    setTimeout(() => window.electronAPI?.openDashboard(), 600);
+    return false;
   }
 
-  gemini = new GeminiLive({
-    onStateChange: setState,
-    onTranscript:  appendTranscript,
-    onUserText:    setUserText,
-    onError:       showError,
-    onReady: () => {
-      stopVisualizer = gemini.startVisualizer(onVisualizerBars);
-    },
-  });
+  setState('connecting');
+  errorBox.classList.add('hidden');
 
-  setState('listening');
+  if (!gemini) {
+    gemini = new GeminiLive({
+      onStateChange: setState,
+      onTranscript:  appendTranscript,
+      onUserText:    setUserText,
+      onError:       (msg) => { showError(msg); setState('idle'); },
+      onReady: () => { stopVisualizer = gemini.startVisualizer(onVisualizerBars); },
+    });
+  }
 
   try {
     await gemini.connect();
+    return true;
   } catch (err) {
+    setState('idle');
     if (err?.message === 'NO_API_KEY') {
-      showError('Add your API key in the Dashboard → Settings.');
-      setTimeout(() => window.electronAPI?.openDashboard(), 400);
+      showError('No API key — opening dashboard.');
+      setTimeout(() => window.electronAPI?.openDashboard(), 600);
     } else {
       showError(err?.message || 'Failed to connect to Gemini.');
     }
+    return false;
   }
 }
 
@@ -228,7 +242,14 @@ function closeAssistant() {
 }
 
 // ──── Event listeners ──────────────────────────────────────────────────────────
-orbWrap.addEventListener('click', () => { if (!isOpen) openAssistant(); });
+orbWrap.addEventListener('click', async () => {
+  if (!isOpen) {
+    await openAssistant();
+  } else if (!gemini || !gemini.connected) {
+    // Pill open but disconnected — retry connect
+    await ensureConnected();
+  }
+});
 closeBtn.addEventListener('click', closeAssistant);
 
 keyboardBtn.addEventListener('click', () => {
@@ -240,9 +261,21 @@ keyboardBtn.addEventListener('click', () => {
 sendBtn.addEventListener('click', submitText);
 textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitText(); });
 
-function submitText() {
+async function submitText() {
   const txt = textInput.value.trim();
-  if (!txt || !gemini) return;
+  if (!txt) return;
+
+  // If not yet connected, try to connect first
+  if (!gemini || !gemini.connected) {
+    const ok = await ensureConnected();
+    if (!ok) return;
+    // Give the setup message a beat to land before we send the first text
+    await new Promise(r => setTimeout(r, 600));
+  }
+  if (!gemini || !gemini.connected) {
+    showError('Still connecting — try again in a moment.');
+    return;
+  }
   gemini.sendText(txt);
   textInput.value = '';
   showingInput = false;

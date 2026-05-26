@@ -354,6 +354,16 @@ body {
   text-transform: uppercase;
 }
 
+.panel[data-state="connecting"] .status-mini {
+  background: rgba(255,170,0,0.08);
+  border-color: rgba(255,170,0,0.3);
+}
+.panel[data-state="connecting"] .status-dot-mini {
+  background: #ffaa00;
+  box-shadow: 0 0 6px #ffaa00;
+}
+.panel[data-state="connecting"] .status-text { color: rgba(255,170,0,0.95); }
+
 /* Status pill color matches orb state (driven by JS toggling panel.dataset.state) */
 .panel[data-state="thinking"] .status-mini {
   background: rgba(96,165,250,0.08);
