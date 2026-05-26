@@ -1,25 +1,33 @@
-// Computer-use agent powered by Gemini 3.5 Flash (state-of-the-art at OSWorld-Verified 78.4%).
-// Uses standard function calling with normalized 0-999 coordinates.
-// Normalized coords -> physical pixels via main process (Win32 mouse_event).
+// Computer-use agent powered by Gemini 2.5 Computer Use (the dedicated specialist).
+// Per Google docs: Gemini 3.5 Flash does NOT support computer-use; this is the model.
+// Uses normalized 0-999 coords; downstream automation converts to physical pixels.
 
-const CU_MODEL = 'gemini-3.5-flash';
+const CU_MODEL = 'gemini-2.5-computer-use-preview-10-2025';
 const CU_ENDPOINT = (key) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${CU_MODEL}:generateContent?key=${key}`;
 
-const SYSTEM_PROMPT = `You are Aura's precision computer-use agent operating a Windows desktop.
+const SYSTEM_PROMPT = `You are Aura's precision computer-use specialist operating a Windows 11 desktop UI.
 
-INPUT: a screenshot of the current screen + the user's high-level goal.
-OUTPUT: exactly one function call representing the next single action.
+YOUR JOB: given a screenshot + a goal, decide the SINGLE next UI action that makes progress toward the goal. Return exactly one function call.
 
-COORDINATE SYSTEM: all coordinates are NORMALIZED to a 0-999 grid where (0,0) is the top-left and (999,999) is the bottom-right of the screenshot. Look carefully at the screenshot and pick precise coordinates.
+COORDINATE SYSTEM: all coordinates are normalized to a 0-999 grid. (0,0) is the top-left, (999,999) the bottom-right of the screenshot. Look carefully at the screenshot and target the exact center of the element to click.
 
-RULES:
-- Make ONE atomic action per turn (click, type, scroll, hover, key combo, drag).
-- Prefer the highest-confidence target. If unsure, hover first or scroll to reveal more.
-- After typing into a field, press_enter inside type_text_at when submission is expected.
-- When the goal is fully accomplished, call done_done with a brief one-sentence summary. Do not keep acting after success.
-- If you cannot make progress (target not visible, system unresponsive), call done_done with summary="cannot proceed: <reason>".
-- Never click coordinates blindly. Always reference what you see in the screenshot.`;
+CLICK PRECISION RULES:
+- Target the visual CENTER of an element, not its edge
+- For text fields: click slightly inside the field, not on its border
+- For buttons: center of the button text or icon
+- For small icons (taskbar, system tray, close buttons): be especially careful — measure carefully
+- For menu items: click the text label, not the row's edge
+- For window title bars or close buttons: aim center
+- When in doubt, hover first or use keyboard shortcuts (key_combination)
+
+OPERATIONAL RULES:
+- Make ONE atomic action per turn. Do not narrate.
+- This is a Windows DESKTOP, not a web browser. Do NOT call open_web_browser, navigate, search, go_back, go_forward — they are no-ops here. Use key_combination (e.g. 'win', 'win+d') or click_at to launch apps and interact with the OS.
+- For app launching, use key_combination with 'win' to open Start, then type the app name and press 'enter'.
+- After typing into a search/URL field, use the press_enter=true option of type_text_at to submit.
+- If a step takes a moment (page loading, app opening), call wait_5_seconds, then check again.
+- Be decisive: do not endlessly hover or scroll. If you cannot proceed, stop.`;
 
 class ComputerUseAgent {
   constructor({ onStep, onLog }) {
@@ -43,149 +51,39 @@ class ComputerUseAgent {
     return res.json();
   }
 
+  // Exclude browser-only actions that don't apply to a Windows desktop, so the
+  // model is forced to use click_at / type_text_at / key_combination instead.
   _buildTools() {
-    return [{
-      functionDeclarations: [
-        {
-          name: 'click_at',
-          description: 'Left-click at a precise location on screen.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              x: { type: 'NUMBER', description: 'X coordinate (0-999)' },
-              y: { type: 'NUMBER', description: 'Y coordinate (0-999)' },
-            },
-            required: ['x', 'y'],
-          },
+    return [
+      {
+        computerUse: {
+          environment: 'ENVIRONMENT_BROWSER',
+          excludedPredefinedFunctions: [
+            'open_web_browser',
+            'navigate',
+            'search',
+            'go_back',
+            'go_forward',
+          ],
         },
-        {
-          name: 'double_click_at',
-          description: 'Double-click at a precise location.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              x: { type: 'NUMBER' },
-              y: { type: 'NUMBER' },
-            },
-            required: ['x', 'y'],
-          },
-        },
-        {
-          name: 'right_click_at',
-          description: 'Right-click at a precise location to open a context menu.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              x: { type: 'NUMBER' },
-              y: { type: 'NUMBER' },
-            },
-            required: ['x', 'y'],
-          },
-        },
-        {
-          name: 'type_text_at',
-          description: 'Click into a text field at (x,y) then type text. Optionally clear first and/or press Enter to submit.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              x: { type: 'NUMBER', description: 'X coordinate of the field (0-999)' },
-              y: { type: 'NUMBER', description: 'Y coordinate of the field (0-999)' },
-              text: { type: 'STRING', description: 'Text to type' },
-              clear_before_typing: { type: 'BOOLEAN', description: 'Select all + delete before typing' },
-              press_enter: { type: 'BOOLEAN', description: 'Press Enter after typing to submit' },
-            },
-            required: ['text'],
-          },
-        },
-        {
-          name: 'hover_at',
-          description: 'Move the mouse to (x,y) without clicking, e.g. to reveal a tooltip or hover menu.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              x: { type: 'NUMBER' },
-              y: { type: 'NUMBER' },
-            },
-            required: ['x', 'y'],
-          },
-        },
-        {
-          name: 'scroll_at',
-          description: 'Scroll the wheel at (x,y). Use direction up/down and magnitude 1-10.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              x: { type: 'NUMBER' },
-              y: { type: 'NUMBER' },
-              direction: { type: 'STRING', description: 'up or down' },
-              magnitude: { type: 'NUMBER', description: 'Number of wheel ticks (1-10, default 3)' },
-            },
-            required: ['x', 'y', 'direction'],
-          },
-        },
-        {
-          name: 'key_combination',
-          description: 'Press a key or key combination. Use this for hotkeys, Enter, Tab, Escape, Ctrl+C/V/A/Z, F-keys, arrow keys, win+d, alt+tab, etc.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              keys: { type: 'STRING', description: 'Key or combo. Examples: enter, tab, escape, ctrl+a, ctrl+c, alt+tab, win+d, f5' },
-            },
-            required: ['keys'],
-          },
-        },
-        {
-          name: 'drag_and_drop',
-          description: 'Click-and-hold at start (x,y) and release at destination (dx,dy).',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              x: { type: 'NUMBER' },
-              y: { type: 'NUMBER' },
-              destination_x: { type: 'NUMBER' },
-              destination_y: { type: 'NUMBER' },
-            },
-            required: ['x', 'y', 'destination_x', 'destination_y'],
-          },
-        },
-        {
-          name: 'wait',
-          description: 'Pause for some seconds, e.g. while a page loads or an app launches.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              seconds: { type: 'NUMBER', description: 'Seconds to wait (1-10)' },
-            },
-            required: ['seconds'],
-          },
-        },
-        {
-          name: 'done_done',
-          description: 'Call this when the goal has been fully accomplished OR cannot proceed. After this, no further actions will be taken.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              summary: { type: 'STRING', description: 'One sentence describing what was accomplished (or why progress stopped).' },
-            },
-            required: ['summary'],
-          },
-        },
-      ],
-    }];
+      },
+    ];
   }
 
-  // Run a single-shot computer-use loop for a goal. Returns summary string.
+  // Single-shot computer-use loop. Returns summary.
   async run({ apiKey, goal, maxSteps = 12 }) {
     this.aborted = false;
     const contents = [{
       role: 'user',
-      parts: [{ text: `Goal: ${goal}\n\nObserve the screenshot and take the next action. When done, call done_done with a short summary.` }],
+      parts: [{ text: `Task: ${goal}\n\nObserve the screenshot below and take the next single UI action. When the task is fully done OR cannot proceed, output the action result as plain text starting with DONE: <summary>.` }],
     }];
+
+    let lastSummary = '';
 
     for (let step = 0; step < maxSteps; step++) {
       if (this.aborted) return 'Cancelled.';
 
-      // Capture fresh screenshot
+      // Capture clean screenshot (Aura windows hidden)
       const b64 = await window.electronAPI.takeScreenshotClean();
       if (!b64) throw new Error('Screenshot failed');
 
@@ -203,12 +101,7 @@ class ComputerUseAgent {
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         contents,
         tools: this._buildTools(),
-        toolConfig: { functionCallingConfig: { mode: 'ANY' } },
-        generationConfig: {
-          temperature: 0.15,
-          maxOutputTokens: 256,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
       };
 
       const resp = await this._post(apiKey, body);
@@ -217,30 +110,32 @@ class ComputerUseAgent {
       const fc = parts.find(p => p.functionCall)?.functionCall;
       const txt = parts.find(p => p.text)?.text;
 
-      if (txt) this.onLog(txt);
+      if (txt) {
+        this.onLog(txt.slice(0, 160));
+        if (/^\s*DONE:/i.test(txt)) {
+          return txt.replace(/^\s*DONE:\s*/i, '').slice(0, 200);
+        }
+      }
 
       if (!fc) {
-        this.onLog('No action returned, stopping.');
-        return txt || 'Stopped (no action).';
+        // No action and no DONE marker — model gave up
+        return txt || lastSummary || 'Stopped (no action returned).';
       }
 
+      // Push the model's turn into history
       contents.push({ role: 'model', parts: [{ functionCall: fc }] });
-
-      if (fc.name === 'done_done') {
-        const summary = fc.args?.summary || 'Done.';
-        this.onStep({ action: 'done', summary });
-        return summary;
-      }
 
       this.onStep({ action: fc.name, args: fc.args || {} });
       const result = await this._executeAction(fc.name, fc.args || {});
+      lastSummary = `${fc.name}: ${result}`;
 
+      // Push the function response back (URL is required by the schema; we pass a sentinel)
       contents.push({
         role: 'user',
         parts: [{
           functionResponse: {
             name: fc.name,
-            response: { output: result },
+            response: { url: 'aura://desktop', output: result },
           },
         }],
       });
@@ -250,59 +145,66 @@ class ComputerUseAgent {
   }
 
   async _executeAction(name, args) {
+    const api = window.electronAPI;
     switch (name) {
       case 'click_at':
-        await window.electronAPI.computerAction({ action: 'click', nx: args.x, ny: args.y });
-        return 'clicked';
+        await api.computerAction({ action: 'click', nx: args.x, ny: args.y });
+        return `clicked (${args.x},${args.y})`;
       case 'double_click_at':
-        await window.electronAPI.computerAction({ action: 'double_click', nx: args.x, ny: args.y });
-        return 'double-clicked';
+        await api.computerAction({ action: 'double_click', nx: args.x, ny: args.y });
+        return `double-clicked (${args.x},${args.y})`;
       case 'right_click_at':
-        await window.electronAPI.computerAction({ action: 'right_click', nx: args.x, ny: args.y });
-        return 'right-clicked';
+        await api.computerAction({ action: 'right_click', nx: args.x, ny: args.y });
+        return `right-clicked (${args.x},${args.y})`;
       case 'type_text_at':
         if (args.x != null && args.y != null) {
-          await window.electronAPI.computerAction({ action: 'click', nx: args.x, ny: args.y });
-          await new Promise(r => setTimeout(r, 220));
+          await api.computerAction({ action: 'click', nx: args.x, ny: args.y });
+          await new Promise(r => setTimeout(r, 200));
         }
         if (args.clear_before_typing) {
-          await window.electronAPI.computerAction({ action: 'key', key: 'ctrl+a' });
-          await window.electronAPI.computerAction({ action: 'key', key: 'delete' });
+          await api.computerAction({ action: 'key', key: 'ctrl+a' });
+          await api.computerAction({ action: 'key', key: 'delete' });
         }
-        await window.electronAPI.computerAction({ action: 'type', text: args.text || '' });
+        await api.computerAction({ action: 'type', text: args.text || '' });
         if (args.press_enter) {
-          await window.electronAPI.computerAction({ action: 'key', key: 'enter' });
+          await api.computerAction({ action: 'key', key: 'enter' });
         }
-        return 'typed';
+        return `typed "${(args.text || '').slice(0, 40)}"`;
       case 'hover_at':
-        await window.electronAPI.computerAction({ action: 'move', nx: args.x, ny: args.y });
-        return 'hovered';
+        await api.computerAction({ action: 'move', nx: args.x, ny: args.y });
+        return `hovered (${args.x},${args.y})`;
+      case 'scroll_document':
       case 'scroll_at': {
         const dir = (args.direction || 'down').toLowerCase();
         const mag = Math.max(1, Math.min(10, args.magnitude || 3));
-        await window.electronAPI.computerAction({
+        await api.computerAction({
           action: dir === 'up' ? 'scroll_up' : 'scroll_down',
           nx: args.x ?? 500,
           ny: args.y ?? 500,
           clicks: mag,
         });
-        return 'scrolled ' + dir;
+        return `scrolled ${dir} ${mag}`;
       }
       case 'key_combination':
-        await window.electronAPI.computerAction({ action: 'key', key: args.keys || 'enter' });
-        return 'pressed ' + (args.keys || 'enter');
+        await api.computerAction({ action: 'key', key: args.keys || 'enter' });
+        return `pressed ${args.keys}`;
       case 'drag_and_drop':
-        await window.electronAPI.computerAction({
+        await api.computerAction({
           action: 'drag',
           nx: args.x, ny: args.y,
           nx2: args.destination_x, ny2: args.destination_y,
         });
         return 'dragged';
-      case 'wait': {
-        const sec = Math.max(1, Math.min(10, args.seconds || 2));
-        await new Promise(r => setTimeout(r, sec * 1000));
-        return `waited ${sec}s`;
-      }
+      case 'wait_5_seconds':
+        await new Promise(r => setTimeout(r, 5000));
+        return 'waited 5s';
+      // Browser-only actions are excluded; if model returns one anyway, no-op safely
+      case 'open_web_browser':
+      case 'navigate':
+      case 'search':
+      case 'go_back':
+      case 'go_forward':
+        return `${name} is not supported in desktop mode; ignored`;
       default:
         return `unknown action: ${name}`;
     }
