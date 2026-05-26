@@ -18,10 +18,6 @@ const sendBtn         = document.getElementById('send-btn');
 const errorBox        = document.getElementById('error-box');
 const keyboardBtn     = document.getElementById('keyboard-btn');
 const settingsBtn     = document.getElementById('settings-btn');
-const settingsOverlay = document.getElementById('settings-overlay');
-const apiKeyInput     = document.getElementById('api-key-input');
-const settingsSave    = document.getElementById('settings-save');
-const settingsCancel  = document.getElementById('settings-cancel');
 
 // ──── Build panel visualizer bars ─────────────────────────────────────────────
 const BAR_COUNT = 22;
@@ -74,16 +70,17 @@ const ICONS = {
 };
 
 const STATUS_LABELS = {
-  idle:      '',
-  listening: 'Listening…',
-  thinking:  'Thinking…',
-  speaking:  'Speaking…',
+  idle:      'READY',
+  listening: 'LISTENING',
+  thinking:  'THINKING',
+  speaking:  'SPEAKING',
 };
 
 // ──── Set state ────────────────────────────────────────────────────────────────
 function setState(state) {
   currentState = state;
   orbWrap.className = `orb-wrap ${state}`;
+  panel.dataset.state = state;
   const pathEl = orbIcon.querySelector('path');
   if (pathEl) pathEl.setAttribute('d', ICONS[state] || ICONS.idle);
   statusText.textContent = STATUS_LABELS[state];
@@ -124,47 +121,15 @@ function onVisualizerBars(bars) {
   });
 }
 
-// ──── Settings ────────────────────────────────────────────────────────────────
-function openSettings() {
-  apiKeyInput.value = localStorage.getItem('gemini_api_key') || '';
-  settingsOverlay.classList.remove('hidden');
-  setTimeout(() => apiKeyInput.focus(), 40);
+// ──── API key check (stored by dashboard or legacy localStorage) ─────────────
+async function hasApiKey() {
+  let key = '';
+  try { key = await window.electronAPI?.storeGet('settings', 'apiKey') || ''; } catch {}
+  if (!key) key = localStorage.getItem('gemini_api_key') || '';
+  return !!key;
 }
 
-function closeSettings() {
-  settingsOverlay.classList.add('hidden');
-}
-
-async function saveSettings() {
-  const key = apiKeyInput.value.trim();
-  if (!key) return;
-  localStorage.setItem('gemini_api_key', key);
-  // Mirror to electron-store so dashboard sees it
-  try { await window.electronAPI?.storeSet('settings', 'apiKey', key); } catch {}
-  closeSettings();
-  if (!isOpen) return;
-  // Panel open but no gemini yet (first-run flow) — start fresh
-  if (!gemini) {
-    gemini = new GeminiLive({
-      onStateChange: setState,
-      onTranscript:  appendTranscript,
-      onUserText:    setUserText,
-      onError:       showError,
-      onReady: () => { stopVisualizer = gemini.startVisualizer(onVisualizerBars); },
-    });
-    setState('listening');
-  }
-  if (!gemini.connected) {
-    errorBox.classList.add('hidden');
-    try {
-      await gemini.connect();
-    } catch (err) {
-      showError(err?.message || 'Failed to connect.');
-    }
-  }
-}
-
-// Settings button now opens the full dashboard
+// Settings button opens the full dashboard (which has the Settings tab)
 settingsBtn.addEventListener('click', () => window.electronAPI?.openDashboard());
 
 // Dashboard button
@@ -196,11 +161,6 @@ document.querySelectorAll('.chip').forEach(btn => {
   });
 });
 
-// Legacy overlay still available as fallback for first-run / no-key situations
-const _origOpenSettings = openSettings;
-settingsCancel.addEventListener('click', closeSettings);
-settingsSave.addEventListener('click', saveSettings);
-apiKeyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSettings(); });
 
 // ──── Open / Close ────────────────────────────────────────────────────────────
 async function openAssistant() {
@@ -210,7 +170,6 @@ async function openAssistant() {
   transcriptEl.classList.add('hidden');
   userTextEl.classList.add('hidden');
   errorBox.classList.add('hidden');
-  settingsOverlay.classList.add('hidden');
   closeBtn.classList.remove('hidden');
 
   panel.classList.remove('hidden');
@@ -221,9 +180,10 @@ async function openAssistant() {
 
   window.electronAPI?.resizeExpanded();
 
-  // No key saved — show settings immediately
-  if (!localStorage.getItem('gemini_api_key')) {
-    openSettings();
+  // No key saved — direct user to the dashboard to set one
+  if (!(await hasApiKey())) {
+    showError('No Gemini API key set. Opening Settings…');
+    setTimeout(() => window.electronAPI?.openDashboard(), 400);
     return;
   }
 
@@ -243,7 +203,8 @@ async function openAssistant() {
     await gemini.connect();
   } catch (err) {
     if (err?.message === 'NO_API_KEY') {
-      openSettings();
+      showError('Add your API key in the Dashboard → Settings.');
+      setTimeout(() => window.electronAPI?.openDashboard(), 400);
     } else {
       showError(err?.message || 'Failed to connect to Gemini.');
     }
@@ -261,7 +222,6 @@ function closeAssistant() {
   panel.classList.add('hidden');
   textInputRow.classList.add('hidden');
   closeBtn.classList.add('hidden');
-  settingsOverlay.classList.add('hidden');
 
   window.electronAPI?.resizeCollapsed();
   setState('idle');
