@@ -47,7 +47,7 @@ async function captureAndIndex() {
     if (apiKey) {
       try {
         const b64 = jpg.toString('base64');
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`, {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -56,9 +56,8 @@ async function captureAndIndex() {
               { text: 'Briefly describe this screen in 1-2 sentences focusing on what app is shown and what the user is doing. Then list any prominent visible text. Keep total under 100 words. Format: "App: <name>. Activity: <what>. Text: <key strings>"' },
             ] }],
             generationConfig: {
-              temperature: 0.1,
               maxOutputTokens: 256,
-              thinkingConfig: { thinkingBudget: 0 },
+              thinkingConfig: { thinkingLevel: 'minimal' },
             },
           }),
         });

@@ -115,7 +115,7 @@ chatInput.addEventListener('input', () => {
 chatSearch.addEventListener('input', () => { chatTab.filter = chatSearch.value; chatTab.render(); });
 newChatBtn.onclick = async () => { await api.storeClear('history'); chatTab.history = []; chatTab.render(); };
 
-// Direct REST call to Gemini 3.5 Flash for text-only chat
+// Direct REST call to Gemini 3 Flash for text-only chat
 async function sendToGemini(text) {
   const apiKey = await api.storeGet('settings', 'apiKey');
   if (!apiKey) throw new Error('No API key set. Open Settings and add one.');
@@ -123,7 +123,7 @@ async function sendToGemini(text) {
   const sysParts = ['You are Aura, a powerful Windows desktop AI assistant. Be concise and direct.'];
   if (memory.name) sysParts.push(`User's name: ${memory.name}`);
   if (memory.notes?.length) sysParts.push(`Notes about the user:\n${memory.notes.join('\n')}`);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -131,9 +131,8 @@ async function sendToGemini(text) {
       systemInstruction: { parts: [{ text: sysParts.join('\n\n') }] },
       contents: [{ role: 'user', parts: [{ text }] }],
       generationConfig: {
-        temperature: 0.6,
         maxOutputTokens: 1024,
-        thinkingConfig: { thinkingBudget: 512 },
+        thinkingConfig: { thinkingLevel: 'minimal' },
       },
     }),
   });

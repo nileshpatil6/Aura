@@ -1,33 +1,35 @@
-// Computer-use agent powered by Gemini 2.5 Computer Use (the dedicated specialist).
-// Per Google docs: Gemini 3.5 Flash does NOT support computer-use; this is the model.
-// Uses normalized 0-999 coords; downstream automation converts to physical pixels.
+// Computer-use agent — Gemini 3 Flash with built-in computer_use tool.
+// Per the Gemini 3 docs: "Gemini 3 Pro and Gemini 3 Flash support Computer Use.
+// Unlike the 2.5 series, you don't need to use a separate model."
 
-const CU_MODEL = 'gemini-2.5-computer-use-preview-10-2025';
+const CU_MODEL = 'gemini-3-flash-preview';
 const CU_ENDPOINT = (key) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${CU_MODEL}:generateContent?key=${key}`;
 
-const CU_SYSTEM_PROMPT = `You are Aura's precision computer-use specialist operating a Windows 11 desktop UI.
+const CU_SYSTEM_PROMPT = `You are Aura's precision computer-use specialist operating a Windows 11 desktop.
 
-YOUR JOB: given a screenshot + a goal, decide the SINGLE next UI action that makes progress toward the goal. Return exactly one function call.
+Given a screenshot + a high-level goal, return exactly ONE function call representing the next single UI action.
 
-COORDINATE SYSTEM: all coordinates are normalized to a 0-999 grid. (0,0) is the top-left, (999,999) the bottom-right of the screenshot. Look carefully at the screenshot and target the exact center of the element to click.
+COORDINATES: normalized 0-999. (0,0) = top-left of the screenshot, (999,999) = bottom-right. Aim for the visual CENTER of the target element.
 
-CLICK PRECISION RULES:
-- Target the visual CENTER of an element, not its edge
-- For text fields: click slightly inside the field, not on its border
-- For buttons: center of the button text or icon
-- For small icons (taskbar, system tray, close buttons): be especially careful — measure carefully
-- For menu items: click the text label, not the row's edge
-- For window title bars or close buttons: aim center
-- When in doubt, hover first or use keyboard shortcuts (key_combination)
+CLICK PRECISION:
+- Text fields → click inside the field (not on its border)
+- Buttons → center of the button label or icon
+- Small UI (taskbar, system tray, close buttons) → measure carefully, prefer the literal pixel center
+- Menu items → click on the text label, not the row edge
 
-OPERATIONAL RULES:
-- Make ONE atomic action per turn. Do not narrate.
-- This is a Windows DESKTOP, not a web browser. Do NOT call open_web_browser, navigate, search, go_back, go_forward — they are no-ops here. Use key_combination (e.g. 'win', 'win+d') or click_at to launch apps and interact with the OS.
-- For app launching, use key_combination with 'win' to open Start, then type the app name and press 'enter'.
-- After typing into a search/URL field, use the press_enter=true option of type_text_at to submit.
-- If a step takes a moment (page loading, app opening), call wait_5_seconds, then check again.
-- Be decisive: do not endlessly hover or scroll. If you cannot proceed, stop.`;
+WINDOWS DESKTOP CONTEXT:
+- This is the local Windows desktop, NOT a web browser
+- To launch an app: key_combination 'win' to open Start, then type_text_at the app name and press_enter
+- Use key_combination for Alt+Tab, Win+D, Ctrl+C, Ctrl+V, F5, etc.
+- Don't call open_web_browser / navigate / search / go_back / go_forward — they are no-ops here
+
+WORKFLOW:
+- One atomic action per turn. Do not narrate.
+- After typing into a search/URL field, use press_enter=true in type_text_at.
+- If a step takes a moment (app opening, page loading), call wait_5_seconds, then continue.
+- If you cannot make progress (target not visible, system frozen), output plain text starting with DONE: <reason>.
+- When the goal is fully accomplished, output plain text starting with DONE: <one-sentence summary>.`;
 
 class ComputerUseAgent {
   constructor({ onStep, onLog }) {
@@ -51,23 +53,20 @@ class ComputerUseAgent {
     return res.json();
   }
 
-  // Exclude browser-only actions that don't apply to a Windows desktop, so the
-  // model is forced to use click_at / type_text_at / key_combination instead.
+  // Built-in computer_use tool; excluded browser-only actions.
   _buildTools() {
-    return [
-      {
-        computerUse: {
-          environment: 'ENVIRONMENT_BROWSER',
-          excludedPredefinedFunctions: [
-            'open_web_browser',
-            'navigate',
-            'search',
-            'go_back',
-            'go_forward',
-          ],
-        },
+    return [{
+      computerUse: {
+        environment: 'ENVIRONMENT_BROWSER',
+        excludedPredefinedFunctions: [
+          'open_web_browser',
+          'navigate',
+          'search',
+          'go_back',
+          'go_forward',
+        ],
       },
-    ];
+    }];
   }
 
   // Single-shot computer-use loop. Returns summary.
@@ -75,7 +74,7 @@ class ComputerUseAgent {
     this.aborted = false;
     const contents = [{
       role: 'user',
-      parts: [{ text: `Task: ${goal}\n\nObserve the screenshot below and take the next single UI action. When the task is fully done OR cannot proceed, output the action result as plain text starting with DONE: <summary>.` }],
+      parts: [{ text: `Task: ${goal}\n\nObserve the screenshot below and take the next single UI action.` }],
     }];
 
     let lastSummary = '';
@@ -83,7 +82,7 @@ class ComputerUseAgent {
     for (let step = 0; step < maxSteps; step++) {
       if (this.aborted) return 'Cancelled.';
 
-      // Capture clean screenshot (Aura windows hidden)
+      // Capture clean screenshot (all Aura windows hidden by action mode)
       const b64 = await window.electronAPI.takeScreenshotClean();
       if (!b64) throw new Error('Screenshot failed');
 
@@ -101,13 +100,17 @@ class ComputerUseAgent {
         systemInstruction: { parts: [{ text: CU_SYSTEM_PROMPT }] },
         contents,
         tools: this._buildTools(),
-        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: 'low' },
+        },
       };
 
       const resp = await this._post(apiKey, body);
       const cand = resp.candidates?.[0];
       const parts = cand?.content?.parts || [];
-      const fc = parts.find(p => p.functionCall)?.functionCall;
+      // Preserve the WHOLE part (including thoughtSignature) so we can echo it back
+      const fcPart = parts.find(p => p.functionCall);
+      const fc = fcPart?.functionCall;
       const txt = parts.find(p => p.text)?.text;
 
       if (txt) {
@@ -118,18 +121,16 @@ class ComputerUseAgent {
       }
 
       if (!fc) {
-        // No action and no DONE marker — model gave up
         return txt || lastSummary || 'Stopped (no action returned).';
       }
 
-      // Push the model's turn into history
-      contents.push({ role: 'model', parts: [{ functionCall: fc }] });
+      // Push the model's turn back into history — KEEP thoughtSignature
+      contents.push({ role: 'model', parts: [fcPart] });
 
       this.onStep({ action: fc.name, args: fc.args || {} });
       const result = await this._executeAction(fc.name, fc.args || {});
       lastSummary = `${fc.name}: ${result}`;
 
-      // Push the function response back (URL is required by the schema; we pass a sentinel)
       contents.push({
         role: 'user',
         parts: [{
@@ -198,13 +199,12 @@ class ComputerUseAgent {
       case 'wait_5_seconds':
         await new Promise(r => setTimeout(r, 5000));
         return 'waited 5s';
-      // Browser-only actions are excluded; if model returns one anyway, no-op safely
       case 'open_web_browser':
       case 'navigate':
       case 'search':
       case 'go_back':
       case 'go_forward':
-        return `${name} is not supported in desktop mode; ignored`;
+        return `${name} is browser-only and not supported on Windows desktop`;
       default:
         return `unknown action: ${name}`;
     }

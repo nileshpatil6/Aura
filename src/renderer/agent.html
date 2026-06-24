@@ -455,13 +455,12 @@ function addAction(text, ok = true) {
 }
 
 async function callGemini(apiKey, contents, tools = null, systemText = null) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
   const body = {
     contents,
     generationConfig: {
-      temperature: 0.2,
       maxOutputTokens: 2048,
-      thinkingConfig: { thinkingBudget: 1024 },
+      thinkingConfig: { thinkingLevel: 'low' },
     },
   };
   if (systemText) body.systemInstruction = { parts: [{ text: systemText }] };
