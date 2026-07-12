@@ -443,6 +443,8 @@ ipcMain.on('resize-collapsed', () => collapseWindow());
 
 ipcMain.on('open-dashboard',  () => createDashboard());
 ipcMain.on('close-dashboard', () => dashboardWindow && dashboardWindow.close());
+ipcMain.on('dash-voice-start', () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activate'); });
+ipcMain.on('dash-voice-stop',  () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('deactivate'); });
 ipcMain.on('open-ask',        () => openAsk());
 ipcMain.on('close-ask',       () => askWindow && askWindow.close());
 ipcMain.on('close-clips',     () => clipsWindow && clipsWindow.close());

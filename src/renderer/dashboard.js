@@ -569,44 +569,241 @@ visionToggle?.addEventListener('change', async () => {
 document.getElementById('open-agent-btn')?.addEventListener('click', () => api.openAgent());
 
 // ═══════════════════════════════════════════════════════════════════
-// VOICE ARENA INIT
+// VOICE ARENA — 3D orb + real audio
 // ═══════════════════════════════════════════════════════════════════
 (function initVoiceArena() {
-  const row = document.getElementById('dash-voice-wave');
-  if (!row) return;
-  const BAR_N = 32;
-  for (let i = 0; i < BAR_N; i++) {
-    const b = document.createElement('div');
-    b.className = 'vwave-bar';
-    const frac = i / BAR_N;
-    const h = 8 + Math.sin(frac * Math.PI) * 28;
-    b.style.height = `${h}px`;
-    b.style.setProperty('--dur', `${(0.4 + Math.random() * 0.6).toFixed(2)}s`);
-    b.style.animationDelay = `${(frac * 0.5).toFixed(2)}s`;
-    row.appendChild(b);
-  }
+  const orbCanvas  = document.getElementById('orb-canvas');
+  const waveCanvas = document.getElementById('wave-canvas');
+  const stateLabel = document.getElementById('dash-voice-state');
+  const stateSub   = document.getElementById('dash-voice-sub');
+  const startBtn   = document.getElementById('dash-start-btn');
+  const stopBtn    = document.getElementById('dash-stop-btn');
+  const arena      = document.getElementById('voice-arena');
+  if (!orbCanvas || !waveCanvas) return;
 
-  // Populate voice name from settings
+  const oc  = orbCanvas.getContext('2d');
+  const wc  = waveCanvas.getContext('2d');
+
+  let analyser   = null;
+  let freqData   = null;
+  let audioCtx   = null;
+  let micStream  = null;
+  let rafId      = null;
+  let voiceOn    = false;
+  let orbT       = 0; // time for idle animation
+  const PALETTE  = { cyan: '#00d9ff', purple: '#a855f7', green: '#00ff9d', red: '#ff3b6b' };
+
+  // Populate voice name
   api.storeGet('settings').then(s => {
     const el = document.getElementById('hud-voice-name');
     if (el && s && s.voice) el.textContent = s.voice;
   }).catch(() => {});
 
-  // Animate sine wave inside sphere
-  const sinePath = document.getElementById('dash-sine-path');
-  if (sinePath) {
-    let t = 0;
-    setInterval(() => {
-      t += 0.08;
-      const pts = [];
-      for (let i = 0; i <= 8; i++) {
-        const x = (i / 8) * 180;
-        const y = 30 + Math.sin(i * 0.8 + t) * 16 + Math.sin(i * 1.6 - t * 1.3) * 6;
-        pts.push(i === 0 ? `M${x},${y}` : `L${x},${y}`);
+  // ── 3D sphere renderer ──────────────────────────────────────────
+  function drawOrb(freqArr) {
+    const W = orbCanvas.width, H = orbCanvas.height;
+    const cx = W / 2, cy = H / 2;
+    const R  = 110;
+    oc.clearRect(0, 0, W, H);
+
+    // Ambient outer glow
+    const outerGlow = oc.createRadialGradient(cx, cy, R * 0.6, cx, cy, R * 1.8);
+    outerGlow.addColorStop(0, 'rgba(0,217,255,0.08)');
+    outerGlow.addColorStop(0.5, 'rgba(168,85,247,0.05)');
+    outerGlow.addColorStop(1, 'transparent');
+    oc.fillStyle = outerGlow;
+    oc.beginPath();
+    oc.arc(cx, cy, R * 1.8, 0, Math.PI * 2);
+    oc.fill();
+
+    // Dark core fill
+    const coreGrd = oc.createRadialGradient(cx - R * 0.25, cy - R * 0.25, 0, cx, cy, R);
+    coreGrd.addColorStop(0, 'rgba(0,30,50,0.95)');
+    coreGrd.addColorStop(0.6, 'rgba(0,10,20,0.98)');
+    coreGrd.addColorStop(1, 'rgba(0,5,12,1)');
+    oc.fillStyle = coreGrd;
+    oc.beginPath();
+    oc.arc(cx, cy, R, 0, Math.PI * 2);
+    oc.fill();
+
+    // Latitude rings (perspective-flattened ellipses) driven by audio
+    const RINGS = 14;
+    for (let r = 0; r < RINGS; r++) {
+      const phi = (r / (RINGS - 1)) * Math.PI;
+      const sinP = Math.sin(phi);
+      const cosP = Math.cos(phi);
+      const ry = cy + R * cosP * 0.88; // 0.88 = perspective tilt
+      const rx = R * sinP;
+
+      // Map ring to a frequency band
+      const bandIdx = freqArr
+        ? Math.floor((r / RINGS) * freqArr.length * 0.7)
+        : -1;
+      const amp = freqArr ? (freqArr[bandIdx] || 0) / 255 : 0;
+
+      // Idle wobble when no audio
+      const idleAmp = voiceOn ? 0 : (Math.sin(orbT * 1.2 + r * 0.5) * 0.5 + 0.5) * 0.15;
+      const totalAmp = amp + idleAmp;
+
+      const distort = totalAmp * 18 * sinP;
+
+      const alpha = 0.12 + totalAmp * 0.55;
+      const lw    = 0.7 + totalAmp * 2;
+
+      // Hue shift: blue -> cyan -> green when active
+      const hue = voiceOn ? 160 + totalAmp * 60 : 190 + r * 4;
+      oc.beginPath();
+      oc.ellipse(cx, ry, rx + distort, (rx * 0.28) + distort * 0.12, 0, 0, Math.PI * 2);
+      oc.strokeStyle = `hsla(${hue}, 95%, 60%, ${alpha})`;
+      oc.lineWidth = lw;
+      oc.stroke();
+    }
+
+    // Longitude arcs
+    const LONGS = 10;
+    for (let l = 0; l < LONGS; l++) {
+      const angle  = (l / LONGS) * Math.PI * 2 + orbT * 0.08;
+      const cosA   = Math.cos(angle);
+      const sinA   = Math.sin(angle);
+      const bandIdx = freqArr
+        ? Math.floor((l / LONGS) * freqArr.length * 0.4)
+        : -1;
+      const amp    = freqArr ? (freqArr[bandIdx] || 0) / 255 : 0;
+      const idleA  = voiceOn ? 0 : (Math.sin(orbT + l) * 0.5 + 0.5) * 0.12;
+      const total  = amp + idleA;
+
+      const STEPS = 48;
+      oc.beginPath();
+      for (let s = 0; s <= STEPS; s++) {
+        const phi = (s / STEPS) * Math.PI;
+        const x   = cx + cosA * R * Math.sin(phi) * (1 + total * 0.12);
+        const y   = cy + R * Math.cos(phi) * 0.88;
+        s === 0 ? oc.moveTo(x, y) : oc.lineTo(x, y);
       }
-      sinePath.setAttribute('d', pts.join(' '));
-    }, 60);
+      oc.strokeStyle = `rgba(168,85,247,${0.08 + total * 0.35})`;
+      oc.lineWidth   = 0.6 + total * 1.6;
+      oc.stroke();
+    }
+
+    // Inner core glow
+    const coreLight = oc.createRadialGradient(cx - R * 0.2, cy - R * 0.22, 0, cx, cy, R * 0.75);
+    const coreAlpha = voiceOn ? 0.28 : 0.16 + Math.sin(orbT) * 0.06;
+    coreLight.addColorStop(0,   `rgba(255,255,255,${coreAlpha * 1.2})`);
+    coreLight.addColorStop(0.3, `rgba(0,217,255,${coreAlpha})`);
+    coreLight.addColorStop(1,   'transparent');
+    oc.fillStyle = coreLight;
+    oc.beginPath();
+    oc.arc(cx, cy, R, 0, Math.PI * 2);
+    oc.fill();
+
+    // Rim glow
+    const rimGrd = oc.createRadialGradient(cx, cy, R * 0.82, cx, cy, R);
+    const rimColor = voiceOn ? '0,255,157' : '0,217,255';
+    rimGrd.addColorStop(0, 'transparent');
+    rimGrd.addColorStop(1, `rgba(${rimColor},0.45)`);
+    oc.fillStyle = rimGrd;
+    oc.beginPath();
+    oc.arc(cx, cy, R, 0, Math.PI * 2);
+    oc.fill();
+
+    // Specular highlight
+    const spec = oc.createRadialGradient(cx - R * 0.28, cy - R * 0.28, 0, cx - R * 0.15, cy - R * 0.15, R * 0.38);
+    spec.addColorStop(0, 'rgba(255,255,255,0.22)');
+    spec.addColorStop(1, 'transparent');
+    oc.fillStyle = spec;
+    oc.beginPath();
+    oc.arc(cx, cy, R, 0, Math.PI * 2);
+    oc.fill();
+
+    orbT += 0.025;
   }
+
+  // ── Waveform renderer ────────────────────────────────────────────
+  function drawWave(freqArr) {
+    const W = waveCanvas.width, H = waveCanvas.height;
+    wc.clearRect(0, 0, W, H);
+    if (!freqArr) {
+      // Flat idle line
+      wc.strokeStyle = 'rgba(0,217,255,0.15)';
+      wc.lineWidth = 1;
+      wc.beginPath();
+      wc.moveTo(0, H / 2);
+      wc.lineTo(W, H / 2);
+      wc.stroke();
+      return;
+    }
+    const barW  = W / freqArr.length;
+    const mid   = H / 2;
+    for (let i = 0; i < freqArr.length; i++) {
+      const v   = freqArr[i] / 255;
+      const bH  = Math.max(1, v * H * 0.92);
+      const x   = i * barW;
+      // Cyan -> purple gradient based on position + intensity
+      const hue = 180 + (i / freqArr.length) * 90;
+      const sat = 80 + v * 20;
+      wc.fillStyle = `hsla(${hue},${sat}%,65%,${0.5 + v * 0.5})`;
+      // Mirror: bar goes both up and down from center
+      wc.fillRect(x, mid - bH / 2, Math.max(1, barW - 1), bH);
+    }
+  }
+
+  // ── Main render loop ─────────────────────────────────────────────
+  function renderLoop() {
+    let freq = null;
+    if (analyser && freqData) {
+      analyser.getByteFrequencyData(freqData);
+      freq = freqData;
+    }
+    drawOrb(freq);
+    drawWave(freq);
+    rafId = requestAnimationFrame(renderLoop);
+  }
+
+  // ── Start voice ──────────────────────────────────────────────────
+  startBtn.addEventListener('click', async () => {
+    if (voiceOn) return;
+    try {
+      // Open mic for visualization
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      micStream = stream;
+      audioCtx  = new AudioContext();
+      const src = audioCtx.createMediaStreamSource(stream);
+      analyser  = audioCtx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.75;
+      freqData  = new Uint8Array(analyser.frequencyBinCount);
+      src.connect(analyser);
+
+      voiceOn = true;
+      startBtn.disabled = true;
+      stopBtn.disabled  = false;
+      stateLabel.textContent = 'LISTENING';
+      stateSub.textContent   = 'voice active — speak now';
+
+      // Trigger pill voice
+      api.dashVoiceStart?.();
+    } catch (err) {
+      stateLabel.textContent = 'MIC ERROR';
+      stateSub.textContent   = err.message || 'microphone access denied';
+    }
+  });
+
+  // ── Stop voice ───────────────────────────────────────────────────
+  stopBtn.addEventListener('click', () => {
+    if (!voiceOn) return;
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (audioCtx)  { audioCtx.close(); audioCtx = null; }
+    analyser = null; freqData = null;
+    voiceOn  = false;
+    startBtn.disabled = false;
+    stopBtn.disabled  = true;
+    stateLabel.textContent = 'STANDBY';
+    stateSub.textContent   = 'ready for voice interaction';
+    api.dashVoiceStop?.();
+  });
+
+  // Start render loop immediately (shows idle 3D sphere)
+  renderLoop();
 })();
 
 // ═══════════════════════════════════════════════════════════════════

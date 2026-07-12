@@ -91,51 +91,53 @@
     <main class="main">
       <!-- VOICE TAB -->
       <section class="tab tab-voice" data-tab="voice">
-        <div class="voice-arena" id="voice-arena">
+        <div class="voice-arena" id="voice-arena" data-state="standby">
           <!-- HUD corner brackets -->
           <div class="hud-corner hud-tl"></div>
           <div class="hud-corner hud-tr"></div>
           <div class="hud-corner hud-bl"></div>
           <div class="hud-corner hud-br"></div>
 
-          <!-- Horizontal scan beam -->
-          <div class="scan-beam" id="scan-beam"></div>
+          <!-- Scan beam -->
+          <div class="scan-beam"></div>
 
-          <!-- Central AI sphere -->
-          <div class="ai-sphere-wrap" id="dash-orb-wrap">
-            <div class="sphere-halo sphere-halo-1"></div>
-            <div class="sphere-halo sphere-halo-2"></div>
-            <div class="sphere-halo sphere-halo-3"></div>
-            <div class="ai-sphere" id="dash-orb">
-              <div class="sphere-core-glow"></div>
-              <div class="sphere-surface"></div>
-              <svg class="sphere-sine-wave" id="dash-sine" viewBox="0 0 180 60" preserveAspectRatio="none">
-                <path id="dash-sine-path"
-                  d="M0,30 C15,8 30,52 45,30 C60,8 75,52 90,30 C105,8 120,52 135,30 C150,8 165,52 180,30"
-                  fill="none" stroke="rgba(0,217,255,0.55)" stroke-width="1.8" stroke-linecap="round"/>
-              </svg>
-            </div>
-          </div>
-
-          <!-- Status block -->
-          <div class="voice-status-block">
-            <div class="voice-state-label" id="dash-voice-state">STANDBY</div>
-            <div class="voice-state-sub" id="dash-voice-sub">click the orb in the pill to activate</div>
-          </div>
-
-          <!-- Waveform output -->
-          <div class="voice-wave-row" id="dash-voice-wave"></div>
-
-          <!-- HUD side strips -->
+          <!-- Left HUD strip -->
           <div class="hud-strip hud-strip-left">
             <div class="hud-data"><span class="hud-key">ENGINE</span><span class="hud-val c-cyan">Gemini 3 Flash</span></div>
             <div class="hud-data"><span class="hud-key">MODE</span><span class="hud-val">LIVE AUDIO</span></div>
             <div class="hud-data"><span class="hud-key">PROTOCOL</span><span class="hud-val">WebSocket</span></div>
           </div>
+
+          <!-- Right HUD strip -->
           <div class="hud-strip hud-strip-right">
             <div class="hud-data"><span class="hud-key">VOICE</span><span class="hud-val" id="hud-voice-name">--</span></div>
             <div class="hud-data"><span class="hud-key">CPU</span><span class="hud-val" id="hud-cpu-v">--%</span></div>
             <div class="hud-data"><span class="hud-key">RAM</span><span class="hud-val" id="hud-ram-v">--%</span></div>
+          </div>
+
+          <!-- Central content -->
+          <div class="voice-center">
+            <!-- 3D orb canvas -->
+            <canvas id="orb-canvas" class="orb-canvas" width="280" height="280"></canvas>
+
+            <!-- Status -->
+            <div class="voice-state-label" id="dash-voice-state">STANDBY</div>
+            <div class="voice-state-sub" id="dash-voice-sub">ready for voice interaction</div>
+
+            <!-- Real audio waveform canvas -->
+            <canvas id="wave-canvas" class="wave-canvas" width="480" height="56"></canvas>
+
+            <!-- Start / Stop controls -->
+            <div class="voice-controls">
+              <button class="vbtn vbtn-start" id="dash-start-btn">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/></svg>
+                START
+              </button>
+              <button class="vbtn vbtn-stop" id="dash-stop-btn" disabled>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                STOP
+              </button>
+            </div>
           </div>
         </div>
       </section>

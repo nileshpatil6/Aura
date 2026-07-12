@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setIgnoreMouse:  (v) => ipcRenderer.send('set-ignore-mouse', v),
   openDashboard:     () => ipcRenderer.send('open-dashboard'),
   closeDashboard:    () => ipcRenderer.send('close-dashboard'),
+  dashVoiceStart:    () => ipcRenderer.send('dash-voice-start'),
+  dashVoiceStop:     () => ipcRenderer.send('dash-voice-stop'),
   minimizeDashboard: () => ipcRenderer.invoke('minimize-dashboard'),
   maximizeDashboard: () => ipcRenderer.invoke('maximize-dashboard'),
 
