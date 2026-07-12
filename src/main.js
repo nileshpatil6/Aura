@@ -380,6 +380,7 @@ function hidePillEdge() {
 
 function showPillEdge() {
   stopCursorPoll();
+  if (!isPillHidden) return;  // already visible, do nothing
   isPillHidden = false;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);

@@ -242,7 +242,7 @@ async function ensureConnected() {
       onTranscript:  appendTranscript,
       onUserText:    setUserText,
       onError:       (msg) => { showError(msg); setState('idle'); },
-      onReady: () => { stopVisualizer = gemini.startVisualizer(onVisualizerBars); },
+      onReady: () => { if (gemini) stopVisualizer = gemini.startVisualizer(onVisualizerBars); },
     });
   }
 
