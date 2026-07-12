@@ -1,4 +1,5 @@
 // ──── DOM refs ────────────────────────────────────────────────────────────────
+const peekBar         = document.getElementById('peek-bar');
 const closeBtn        = document.getElementById('close-btn');
 const orbWrap         = document.getElementById('orb-wrap');
 const orbIcon         = document.getElementById('orb-icon');
@@ -62,6 +63,7 @@ let gemini         = null;
 let stopVisualizer = null;
 let showingInput   = false;
 let transcriptText = '';
+let autoHideTimer  = null;  // 20s idle -> edge hide
 
 // ──── Icon paths per state ─────────────────────────────────────────────────────
 const MIC_PATH = 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z';
@@ -167,8 +169,25 @@ document.querySelectorAll('.chip').forEach(btn => {
 });
 
 
+// ──── Auto-hide helpers ───────────────────────────────────────────────────────
+function scheduleAutoHide() {
+  clearTimeout(autoHideTimer);
+  autoHideTimer = setTimeout(() => {
+    if (!voiceActive && !isPanelOpen) {
+      window.electronAPI?.pillAutoHide();
+    }
+  }, 20000);
+}
+
+function cancelAutoHide() {
+  clearTimeout(autoHideTimer);
+  autoHideTimer = null;
+  window.electronAPI?.pillShow();
+}
+
 // ──── Panel open / close (independent of voice) ───────────────────────────────
 function openPanel() {
+  cancelAutoHide();
   isPanelOpen = true;
   panel.classList.remove('hidden');
   void panel.offsetWidth;
@@ -190,6 +209,7 @@ function closePanel() {
 
 // ──── Voice activate (orb click) ──────────────────────────────────────────────
 async function activateVoice() {
+  cancelAutoHide();
   voiceActive = true;
   transcriptText = '';
   transcriptEl.textContent = '';
@@ -259,6 +279,9 @@ function closeAll() {
 
   window.electronAPI?.resizeCollapsed();
   setState('idle');
+
+  // After 20s idle, auto-hide pill to edge
+  scheduleAutoHide();
 }
 
 // ──── Event listeners ──────────────────────────────────────────────────────────
@@ -310,6 +333,11 @@ async function submitText() {
 if (window.electronAPI) {
   window.electronAPI.onActivate(() => { if (!voiceActive) activateVoice(); });
   window.electronAPI.onDeactivate(() => { if (voiceActive) closeAll(); });
+
+  // Peek indicator: show glowing line when pill is hidden and user nears top
+  window.electronAPI.onPillPeeking?.((isPeeking) => {
+    if (peekBar) peekBar.classList.toggle('hidden', !isPeeking);
+  });
 }
 
 // ──── Click-through: ignore mouse on transparent areas ────────────────────────

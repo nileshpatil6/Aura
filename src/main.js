@@ -353,6 +353,43 @@ function collapseWindow() {
   mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
 }
 
+// ── Auto-hide pill at top edge ────────────────────────────────────────────────
+let isPillHidden    = false;
+let cursorPollTimer = null;
+
+function hidePillEdge() {
+  if (!mainWindow || mainWindow.isDestroyed() || isPillHidden) return;
+  isPillHidden = true;
+  // Slide pill up: only 5px visible at top
+  mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, true);
+  // Poll cursor position so we can peek-show when user reaches top
+  if (!cursorPollTimer) {
+    cursorPollTimer = setInterval(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) { stopCursorPoll(); return; }
+      const { y } = screen.getCursorScreenPoint();
+      if (y <= 4) {
+        mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, false);
+        mainWindow.webContents.send('pill-peeking', true);
+      } else if (y > 70 && isPillHidden) {
+        mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, false);
+        mainWindow.webContents.send('pill-peeking', false);
+      }
+    }, 80);
+  }
+}
+
+function showPillEdge() {
+  stopCursorPoll();
+  isPillHidden = false;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
+  mainWindow.webContents.send('pill-peeking', false);
+}
+
+function stopCursorPoll() {
+  if (cursorPollTimer) { clearInterval(cursorPollTimer); cursorPollTimer = null; }
+}
+
 // Single-instance lock — second launch focuses the running app instead of starting a new copy
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -445,6 +482,8 @@ ipcMain.on('open-dashboard',  () => createDashboard());
 ipcMain.on('close-dashboard', () => dashboardWindow && dashboardWindow.close());
 ipcMain.on('dash-voice-start', () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activate'); });
 ipcMain.on('dash-voice-stop',  () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('deactivate'); });
+ipcMain.on('pill-autohide',    () => hidePillEdge());
+ipcMain.on('pill-show',        () => showPillEdge());
 ipcMain.on('open-ask',        () => openAsk());
 ipcMain.on('close-ask',       () => askWindow && askWindow.close());
 ipcMain.on('close-clips',     () => clipsWindow && clipsWindow.close());

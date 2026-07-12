@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   closeDashboard:    () => ipcRenderer.send('close-dashboard'),
   dashVoiceStart:    () => ipcRenderer.send('dash-voice-start'),
   dashVoiceStop:     () => ipcRenderer.send('dash-voice-stop'),
+  pillAutoHide:      () => ipcRenderer.send('pill-autohide'),
+  pillShow:          () => ipcRenderer.send('pill-show'),
+  onPillPeeking:     (cb) => ipcRenderer.on('pill-peeking', (_e, v) => cb(v)),
   minimizeDashboard: () => ipcRenderer.invoke('minimize-dashboard'),
   maximizeDashboard: () => ipcRenderer.invoke('maximize-dashboard'),
 

@@ -33,6 +33,28 @@ body {
 }
 
 /* ══════════════════════════════════════════════
+   PEEK BAR — visible when pill is edge-hidden
+══════════════════════════════════════════════ */
+.peek-bar {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80px;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  background: linear-gradient(90deg, rgba(139,92,246,0.8), rgba(0,217,255,0.9), rgba(139,92,246,0.8));
+  box-shadow: 0 0 12px rgba(0,217,255,0.6), 0 0 4px rgba(139,92,246,0.5);
+  animation: peekPulse 2s ease-in-out infinite;
+  z-index: 9999;
+  pointer-events: none;
+}
+@keyframes peekPulse {
+  0%,100% { opacity: 0.7; }
+  50%      { opacity: 1; box-shadow: 0 0 20px rgba(0,217,255,0.8), 0 0 8px rgba(139,92,246,0.7); }
+}
+
+/* ══════════════════════════════════════════════
    PILL
 ══════════════════════════════════════════════ */
 .pill {

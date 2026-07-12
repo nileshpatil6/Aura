@@ -792,7 +792,7 @@ document.getElementById('open-agent-btn')?.addEventListener('click', () => api.o
   stopBtn.addEventListener('click', () => {
     if (!voiceOn) return;
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-    if (audioCtx)  { audioCtx.close(); audioCtx = null; }
+    if (audioCtx)  { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
     analyser = null; freqData = null;
     voiceOn  = false;
     startBtn.disabled = false;
@@ -804,6 +804,16 @@ document.getElementById('open-agent-btn')?.addEventListener('click', () => api.o
 
   // Start render loop immediately (shows idle 3D sphere)
   renderLoop();
+
+  // Cleanup mic + voice when dashboard window closes
+  window.addEventListener('beforeunload', () => {
+    if (voiceOn) {
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); }
+      if (audioCtx)  { try { audioCtx.close(); } catch (_) {} }
+      api.dashVoiceStop?.();
+    }
+    if (rafId) cancelAnimationFrame(rafId);
+  });
 })();
 
 // ═══════════════════════════════════════════════════════════════════
