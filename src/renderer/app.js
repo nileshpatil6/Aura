@@ -1,37 +1,26 @@
 // ──── DOM refs ────────────────────────────────────────────────────────────────
-const pill          = document.getElementById('pill');
-const orbWrap       = document.getElementById('orb-wrap');
-const orbIcon       = document.getElementById('orb-icon');
-const pillWaveEl    = document.getElementById('pill-wave');
-const pillLabelEl   = document.getElementById('pill-label');
-const pillStatusEl  = document.getElementById('pill-status');
-const expandBtn     = document.getElementById('expand-btn');
-const closeBtn      = document.getElementById('close-btn');
-const panel         = document.getElementById('panel');
-const statusText    = document.getElementById('status-text');
-const visualizer    = document.getElementById('visualizer');
-const barsEl        = document.getElementById('bars');
-const thinkingAnim  = document.getElementById('thinking-anim');
-const speakingAnim  = document.getElementById('speaking-anim');
-const waveBarsEl    = document.getElementById('wave-bars');
-const idleIconEl    = document.getElementById('idle-icon');
-const jarvisHintEl  = document.getElementById('jarvis-hint');
-const transcriptEl  = document.getElementById('transcript');
-const userTextEl    = document.getElementById('user-text');
-const textInputRow  = document.getElementById('text-input-row');
-const textInput     = document.getElementById('text-input');
-const sendBtn       = document.getElementById('send-btn');
-const errorBox      = document.getElementById('error-box');
-const quickToggle   = document.getElementById('quick-toggle');
-const chipRowEl     = document.getElementById('chip-row');
-const navToggle     = document.getElementById('nav-toggle');
-const navRowEl      = document.getElementById('nav-row');
-const keyboardBtn   = document.getElementById('keyboard-btn');
-const dashboardBtn  = document.getElementById('dashboard-btn');
-const settingsBtn   = document.getElementById('settings-btn');
+const closeBtn        = document.getElementById('close-btn');
+const orbWrap         = document.getElementById('orb-wrap');
+const orbIcon         = document.getElementById('orb-icon');
+const pillWaveEl      = document.getElementById('pill-wave');
+const panel           = document.getElementById('panel');
+const statusText      = document.getElementById('status-text');
+const visualizer      = document.getElementById('visualizer');
+const barsEl          = document.getElementById('bars');
+const thinkingAnim    = document.getElementById('thinking-anim');
+const speakingAnim    = document.getElementById('speaking-anim');
+const waveBarsEl      = document.getElementById('wave-bars');
+const transcriptEl    = document.getElementById('transcript');
+const userTextEl      = document.getElementById('user-text');
+const textInputRow    = document.getElementById('text-input-row');
+const textInput       = document.getElementById('text-input');
+const sendBtn         = document.getElementById('send-btn');
+const errorBox        = document.getElementById('error-box');
+const keyboardBtn     = document.getElementById('keyboard-btn');
+const settingsBtn     = document.getElementById('settings-btn');
 
 // ──── Build panel visualizer bars ─────────────────────────────────────────────
-const BAR_COUNT = 16;
+const BAR_COUNT = 22;
 for (let i = 0; i < BAR_COUNT; i++) {
   const b = document.createElement('div');
   b.className = 'bar';
@@ -39,43 +28,37 @@ for (let i = 0; i < BAR_COUNT; i++) {
   barsEl.appendChild(b);
 }
 
+// ──── Build pill mini waveform bars ───────────────────────────────────────────
+const PILL_BAR_COUNT = 12;
+const pillBarEls = [];
+for (let i = 0; i < PILL_BAR_COUNT; i++) {
+  const b = document.createElement('div');
+  b.className = 'pill-wave-bar';
+  b.style.height = '3px';
+  pillWaveEl.appendChild(b);
+  pillBarEls.push(b);
+}
+
 // ──── Build speaking wave bars ─────────────────────────────────────────────────
-const WAVE_COUNT = 18;
+const WAVE_COUNT = 24;
 const waveColors = ['#34d399','#06b6d4','#22d3ee','#34d399'];
 for (let i = 0; i < WAVE_COUNT; i++) {
   const b = document.createElement('div');
   b.className = 'wave-bar';
   const frac = i / WAVE_COUNT;
-  const h = 4 + Math.sin(frac * Math.PI) * 22;
+  const h = 4 + Math.sin(frac * Math.PI) * 28;
   b.style.height = `${h}px`;
   b.style.background = waveColors[Math.floor(frac * waveColors.length)];
-  b.style.animationDelay = `${(frac * 0.5).toFixed(3)}s`;
+  b.style.animationDelay = `${(frac * 0.55).toFixed(3)}s`;
   waveBarsEl.appendChild(b);
 }
 
-// ──── Build pill wave bars (100 bars -- fills full-width in wave mode) ────────
-const PILL_BAR_COUNT = 100;
-const pillBarEls = [];
-for (let i = 0; i < PILL_BAR_COUNT; i++) {
-  const b = document.createElement('div');
-  b.className = 'pill-wave-bar';
-  const frac = i / PILL_BAR_COUNT;
-  const delay = (Math.sin(frac * Math.PI * 4) * 0.25 + 0.25).toFixed(3);
-  b.style.setProperty('--delay', `${delay}s`);
-  b.style.animationDelay = `${delay}s`;
-  const h = 4 + Math.abs(Math.sin(frac * Math.PI * 3)) * 20;
-  b.style.height = `${h}px`;
-  pillWaveEl.appendChild(b);
-  pillBarEls.push(b);
-}
-
 // ──── State ───────────────────────────────────────────────────────────────────
+let isOpen         = false;
 let currentState   = 'idle';
 let gemini         = null;
-let stopViz        = null;
+let stopVisualizer = null;
 let showingInput   = false;
-let isPanelOpen    = false;
-let isWaveMode     = false;
 let transcriptText = '';
 
 // ──── Icon paths per state ─────────────────────────────────────────────────────
@@ -96,93 +79,20 @@ const STATUS_LABELS = {
   speaking:   'SPEAKING',
 };
 
-const JARVIS_HINTS = {
-  idle:       'TAP ORB TO SPEAK',
-  connecting: 'CONNECTING...',
-  listening:  'LISTENING...',
-  thinking:   'THINKING...',
-  speaking:   'SPEAKING',
-};
-
-// ──── setState ────────────────────────────────────────────────────────────────
+// ──── Set state ────────────────────────────────────────────────────────────────
 function setState(state) {
   currentState = state;
-
   orbWrap.className = `orb-wrap ${state}`;
-
+  panel.dataset.state = state;
   const pathEl = orbIcon.querySelector('path');
   if (pathEl) pathEl.setAttribute('d', ICONS[state] || ICONS.idle);
+  statusText.textContent = STATUS_LABELS[state];
 
-  panel.dataset.state = state;
-
-  if (statusText) statusText.textContent = STATUS_LABELS[state];
-  if (pillStatusEl) pillStatusEl.textContent = STATUS_LABELS[state];
-
-  const isIdle = state === 'idle' || state === 'connecting';
   visualizer.classList.toggle('hidden',   state !== 'listening');
   thinkingAnim.classList.toggle('hidden', state !== 'thinking');
   speakingAnim.classList.toggle('hidden', state !== 'speaking');
-  idleIconEl.classList.toggle('hidden',   !isIdle);
 
-  if (jarvisHintEl) jarvisHintEl.textContent = JARVIS_HINTS[state] || '';
-
-  const voiceActive = state === 'listening' || state === 'speaking';
-  pillWaveEl.classList.toggle('visible', voiceActive && !isWaveMode);
-
-  if (!isPanelOpen) {
-    if (voiceActive) enterWaveMode();
-    else exitWaveMode();
-  }
-}
-
-// ──── Wave mode ───────────────────────────────────────────────────────────────
-function enterWaveMode() {
-  if (isWaveMode) return;
-  isWaveMode = true;
-  pill.classList.add('wave-active');
-  pillWaveEl.classList.add('visible');
-  window.electronAPI?.resizeWave?.();
-}
-
-function exitWaveMode() {
-  if (!isWaveMode) return;
-  isWaveMode = false;
-  pill.classList.remove('wave-active');
-  const voiceActive = currentState === 'listening' || currentState === 'speaking';
-  pillWaveEl.classList.toggle('visible', voiceActive);
-  window.electronAPI?.resizeCollapsed?.();
-}
-
-// ──── Panel open / close ──────────────────────────────────────────────────────
-function openPanel() {
-  if (isPanelOpen) return;
-  isPanelOpen = true;
-
-  if (isWaveMode) {
-    isWaveMode = false;
-    pill.classList.remove('wave-active');
-  }
-
-  panel.classList.remove('hidden');
-  void panel.offsetWidth;
-  expandBtn.classList.add('open');
-  closeBtn.classList.remove('hidden');
-  window.electronAPI?.resizeExpanded?.();
-}
-
-function closePanel() {
-  if (!isPanelOpen) return;
-  isPanelOpen = false;
-
-  panel.classList.add('hidden');
-  expandBtn.classList.remove('open');
-  closeBtn.classList.add('hidden');
-  showingInput = false;
-  textInputRow.classList.add('hidden');
-
-  const voiceActive = currentState === 'listening' || currentState === 'speaking';
-  if (voiceActive) enterWaveMode();
-  else window.electronAPI?.resizeCollapsed?.();
+  pillWaveEl.classList.toggle('visible', isOpen && state === 'listening');
 }
 
 // ──── Helpers ─────────────────────────────────────────────────────────────────
@@ -210,11 +120,11 @@ function onVisualizerBars(bars) {
 
   pillBarEls.forEach((el, i) => {
     const idx = Math.floor((i / PILL_BAR_COUNT) * bars.length);
-    el.style.height = `${Math.max(3, (bars[idx] || 0) * 0.85)}px`;
+    el.style.height = `${Math.max(3, bars[idx] * 0.7)}px`;
   });
 }
 
-// ──── API key check ────────────────────────────────────────────────────────────
+// ──── API key check (stored by dashboard or legacy localStorage) ─────────────
 async function hasApiKey() {
   let key = '';
   try { key = await window.electronAPI?.storeGet('settings', 'apiKey') || ''; } catch {}
@@ -222,12 +132,67 @@ async function hasApiKey() {
   return !!key;
 }
 
-// ──── Ensure connected ────────────────────────────────────────────────────────
+// Settings button opens the full dashboard (which has the Settings tab)
+settingsBtn.addEventListener('click', () => window.electronAPI?.openDashboard());
+
+// Dashboard button
+const dashboardBtn = document.getElementById('dashboard-btn');
+dashboardBtn?.addEventListener('click', () => window.electronAPI?.openDashboard());
+
+// Quick-action chips
+document.querySelectorAll('.chip').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const a = btn.dataset.quick;
+    const api = window.electronAPI;
+    try {
+      if (a === 'play_pause') await api.mediaControl('play_pause');
+      else if (a === 'next')  await api.mediaControl('next');
+      else if (a === 'mute')  await api.mediaControl('mute');
+      else if (a === 'agent') api.openAgent();
+      else if (a === 'ask')   api.openAsk();
+      else if (a === 'clipboard') {
+        const r = await api.readClipboard();
+        appendTranscript(`Clipboard: ${(r.output || '').slice(0, 200)}\n`);
+      }
+      else if (a === 'minimize') await api.minimizeAll();
+      else if (a === 'lock')     await api.lockScreen();
+      btn.style.background = 'rgba(52, 211, 153, 0.35)';
+      setTimeout(() => { btn.style.background = ''; }, 280);
+    } catch (e) {
+      showError(e.message);
+    }
+  });
+});
+
+
+// ──── Open / Close ────────────────────────────────────────────────────────────
+async function openAssistant() {
+  isOpen = true;
+  transcriptText = '';
+  transcriptEl.textContent = '';
+  transcriptEl.classList.add('hidden');
+  userTextEl.classList.add('hidden');
+  errorBox.classList.add('hidden');
+  closeBtn.classList.remove('hidden');
+
+  panel.classList.remove('hidden');
+  void panel.offsetWidth;
+  panel.style.animation = 'none';
+  void panel.offsetWidth;
+  panel.style.animation = '';
+
+  window.electronAPI?.resizeExpanded();
+
+  await ensureConnected();
+}
+
+// Connect (or reconnect) the live API on demand. Surfaces errors visibly.
 async function ensureConnected() {
   if (gemini && gemini.connected) return true;
 
   if (!(await hasApiKey())) {
-    showError('No Gemini API key -- open Dashboard > Settings.');
+    showError('No Gemini API key set — opening dashboard.');
+    setState('idle');
     setTimeout(() => window.electronAPI?.openDashboard(), 600);
     return false;
   }
@@ -241,7 +206,7 @@ async function ensureConnected() {
       onTranscript:  appendTranscript,
       onUserText:    setUserText,
       onError:       (msg) => { showError(msg); setState('idle'); },
-      onReady:       () => { stopViz = gemini.startVisualizer(onVisualizerBars); },
+      onReady: () => { stopVisualizer = gemini.startVisualizer(onVisualizerBars); },
     });
   }
 
@@ -251,7 +216,7 @@ async function ensureConnected() {
   } catch (err) {
     setState('idle');
     if (err?.message === 'NO_API_KEY') {
-      showError('No API key -- open Dashboard > Settings.');
+      showError('No API key — opening dashboard.');
       setTimeout(() => window.electronAPI?.openDashboard(), 600);
     } else {
       showError(err?.message || 'Failed to connect to Gemini.');
@@ -260,48 +225,33 @@ async function ensureConnected() {
   }
 }
 
-function disconnectVoice() {
-  if (stopViz) { stopViz(); stopViz = null; }
-  if (gemini)  { gemini.disconnect(); gemini = null; }
-  transcriptText = '';
-  transcriptEl.textContent = '';
-  transcriptEl.classList.add('hidden');
-  userTextEl.classList.add('hidden');
-  errorBox.classList.add('hidden');
+function closeAssistant() {
+  isOpen = false;
+  showingInput = false;
+  pillWaveEl.classList.remove('visible');
+
+  if (stopVisualizer) { stopVisualizer(); stopVisualizer = null; }
+  if (gemini)         { gemini.disconnect(); gemini = null; }
+
+  panel.classList.add('hidden');
+  textInputRow.classList.add('hidden');
+  closeBtn.classList.add('hidden');
+
+  window.electronAPI?.resizeCollapsed();
   setState('idle');
 }
 
-// ──── Orb click: toggle voice ─────────────────────────────────────────────────
+// ──── Event listeners ──────────────────────────────────────────────────────────
 orbWrap.addEventListener('click', async () => {
-  if (gemini && gemini.connected) {
-    disconnectVoice();
-  } else {
+  if (!isOpen) {
+    await openAssistant();
+  } else if (!gemini || !gemini.connected) {
+    // Pill open but disconnected — retry connect
     await ensureConnected();
   }
 });
+closeBtn.addEventListener('click', closeAssistant);
 
-// ──── Expand / collapse panel ─────────────────────────────────────────────────
-expandBtn.addEventListener('click', () => {
-  if (isPanelOpen) closePanel();
-  else openPanel();
-});
-
-closeBtn.addEventListener('click', closePanel);
-
-// ──── Collapsible sections ────────────────────────────────────────────────────
-quickToggle.addEventListener('click', () => {
-  const nowOpen = chipRowEl.classList.contains('hidden');
-  chipRowEl.classList.toggle('hidden', !nowOpen);
-  quickToggle.classList.toggle('open', nowOpen);
-});
-
-navToggle.addEventListener('click', () => {
-  const nowOpen = navRowEl.classList.contains('hidden');
-  navRowEl.classList.toggle('hidden', !nowOpen);
-  navToggle.classList.toggle('open', nowOpen);
-});
-
-// ──── Text input ──────────────────────────────────────────────────────────────
 keyboardBtn.addEventListener('click', () => {
   showingInput = !showingInput;
   textInputRow.classList.toggle('hidden', !showingInput);
@@ -315,58 +265,27 @@ async function submitText() {
   const txt = textInput.value.trim();
   if (!txt) return;
 
+  // If not yet connected, try to connect first
   if (!gemini || !gemini.connected) {
     const ok = await ensureConnected();
     if (!ok) return;
+    // Give the setup message a beat to land before we send the first text
     await new Promise(r => setTimeout(r, 600));
   }
-
   if (!gemini || !gemini.connected) {
-    showError('Still connecting -- try again in a moment.');
+    showError('Still connecting — try again in a moment.');
     return;
   }
-
   gemini.sendText(txt);
   textInput.value = '';
   showingInput = false;
   textInputRow.classList.add('hidden');
 }
 
-// ──── Quick action chips ──────────────────────────────────────────────────────
-document.querySelectorAll('.chip').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    const a = btn.dataset.quick;
-    const api = window.electronAPI;
-    try {
-      if (a === 'play_pause')     await api.mediaControl('play_pause');
-      else if (a === 'next')      await api.mediaControl('next');
-      else if (a === 'agent')     api.openAgent();
-      else if (a === 'ask')       api.openAsk();
-      else if (a === 'lock')      await api.lockScreen();
-      else if (a === 'clipboard') {
-        const r = await api.readClipboard();
-        appendTranscript(`Clipboard: ${(r.output || '').slice(0, 200)}\n`);
-      }
-      btn.style.background = 'rgba(52,211,153,0.28)';
-      setTimeout(() => { btn.style.background = ''; }, 280);
-    } catch (e) { showError(e.message); }
-  });
-});
-
-// ──── Dashboard / Settings ────────────────────────────────────────────────────
-dashboardBtn?.addEventListener('click', () => window.electronAPI?.openDashboard());
-settingsBtn?.addEventListener('click',  () => window.electronAPI?.openDashboard());
-
 // ──── Electron IPC ────────────────────────────────────────────────────────────
 if (window.electronAPI) {
-  window.electronAPI.onActivate(() => {
-    if (!isPanelOpen) openPanel();
-    ensureConnected();
-  });
-  window.electronAPI.onDeactivate(() => {
-    disconnectVoice();
-    closePanel();
-  });
+  window.electronAPI.onActivate(() => { if (!isOpen) openAssistant(); });
+  window.electronAPI.onDeactivate(() => { if (isOpen) closeAssistant(); });
 }
 
 // ──── Click-through: ignore mouse on transparent areas ────────────────────────
@@ -375,6 +294,36 @@ document.addEventListener('mousemove', (e) => {
   const overUI = el && el.id !== 'app' && el !== document.body && el !== document.documentElement;
   window.electronAPI?.setIgnoreMouse(!overUI);
 });
+
+// ──── Launch wave (one-time startup animation) ────────────────────────────────
+(function initLaunchWave() {
+  const launchWave = document.getElementById('launch-wave');
+  const launchBars = document.getElementById('launch-bars');
+  if (!launchWave || !launchBars) return;
+
+  // Build 80 animated bars
+  const BAR_N = 80;
+  for (let i = 0; i < BAR_N; i++) {
+    const b = document.createElement('div');
+    b.className = 'launch-bar';
+    const frac = i / BAR_N;
+    // Staggered delays create a rolling sine-wave feel
+    const delay = (Math.sin(frac * Math.PI * 5) * 0.3 + 0.35).toFixed(3);
+    b.style.setProperty('--d', `${delay}s`);
+    b.style.animationDelay = `${(frac * 0.4).toFixed(3)}s`;
+    launchBars.appendChild(b);
+  }
+
+  if (window.electronAPI?.onLaunchWaveStart) {
+    window.electronAPI.onLaunchWaveStart(() => {
+      launchWave.classList.remove('hidden');
+    });
+    window.electronAPI.onLaunchWaveEnd(() => {
+      launchWave.classList.add('fade-out');
+      setTimeout(() => launchWave.classList.add('hidden'), 620);
+    });
+  }
+})();
 
 // ──── Init ────────────────────────────────────────────────────────────────────
 setState('idle');
