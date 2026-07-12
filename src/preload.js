@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   collapse:        () => ipcRenderer.send('collapse'),
   resizeExpanded:  () => ipcRenderer.send('resize-expanded'),
   resizeCollapsed: () => ipcRenderer.send('resize-collapsed'),
+  resizeWave:      () => ipcRenderer.send('resize-wave'),
   setIgnoreMouse:  (v) => ipcRenderer.send('set-ignore-mouse', v),
   openDashboard:     () => ipcRenderer.send('open-dashboard'),
   closeDashboard:    () => ipcRenderer.send('close-dashboard'),

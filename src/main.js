@@ -15,9 +15,10 @@ let isVisible = false;
 let actionModeHidden = [];  // windows we hid during action mode
 
 const COLLAPSED_W = 88;
-const COLLAPSED_H = 56;
+const COLLAPSED_H = 58;
 const EXPANDED_W  = 380;
-const EXPANDED_H  = 360;
+const EXPANDED_H  = 500;
+const WAVE_H      = 64;
 
 function getCenter(w) {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
@@ -338,6 +339,12 @@ function collapseWindow() {
   mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
 }
 
+function waveWindow() {
+  if (!mainWindow) return;
+  const { width } = screen.getPrimaryDisplay().workAreaSize;
+  mainWindow.setBounds({ x: 0, y: 0, width, height: WAVE_H }, true);
+}
+
 // Single-instance lock — second launch focuses the running app instead of starting a new copy
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -423,8 +430,9 @@ app.on('will-quit', () => {
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.on('collapse', () => { collapseWindow(); isVisible = false; });
-ipcMain.on('resize-expanded', () => expandWindow());
+ipcMain.on('resize-expanded',  () => expandWindow());
 ipcMain.on('resize-collapsed', () => collapseWindow());
+ipcMain.on('resize-wave',      () => waveWindow());
 
 ipcMain.on('open-dashboard',  () => createDashboard());
 ipcMain.on('close-dashboard', () => dashboardWindow && dashboardWindow.close());
