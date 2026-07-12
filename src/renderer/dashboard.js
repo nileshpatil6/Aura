@@ -569,7 +569,7 @@ visionToggle?.addEventListener('change', async () => {
 document.getElementById('open-agent-btn')?.addEventListener('click', () => api.openAgent());
 
 // ═══════════════════════════════════════════════════════════════════
-// VOICE ARENA — 3D orb + real audio
+// VOICE ARENA — smooth fluid blob + real oscilloscope + pill sync
 // ═══════════════════════════════════════════════════════════════════
 (function initVoiceArena() {
   const orbCanvas  = document.getElementById('orb-canvas');
@@ -578,20 +578,33 @@ document.getElementById('open-agent-btn')?.addEventListener('click', () => api.o
   const stateSub   = document.getElementById('dash-voice-sub');
   const startBtn   = document.getElementById('dash-start-btn');
   const stopBtn    = document.getElementById('dash-stop-btn');
-  const arena      = document.getElementById('voice-arena');
   if (!orbCanvas || !waveCanvas) return;
 
-  const oc  = orbCanvas.getContext('2d');
-  const wc  = waveCanvas.getContext('2d');
+  const oc = orbCanvas.getContext('2d');
+  const wc = waveCanvas.getContext('2d');
 
-  let analyser   = null;
-  let freqData   = null;
-  let audioCtx   = null;
-  let micStream  = null;
-  let rafId      = null;
-  let voiceOn    = false;
-  let orbT       = 0; // time for idle animation
-  const PALETTE  = { cyan: '#00d9ff', purple: '#a855f7', green: '#00ff9d', red: '#ff3b6b' };
+  // DPR scaling for crisp rendering
+  const DPR = window.devicePixelRatio || 1;
+  [orbCanvas, waveCanvas].forEach(c => {
+    const rect = c.getBoundingClientRect();
+    c.width  = (parseFloat(c.getAttribute('width'))  || rect.width)  * DPR;
+    c.height = (parseFloat(c.getAttribute('height')) || rect.height) * DPR;
+    c.getContext('2d').scale(DPR, DPR);
+  });
+
+  const OW = orbCanvas.width / DPR, OH = orbCanvas.height / DPR;
+  const WW = waveCanvas.width / DPR, WH = waveCanvas.height / DPR;
+
+  let freqAnalyser = null;
+  let timeAnalyser = null;
+  let freqData     = null;
+  let timeData     = null;
+  let audioCtx     = null;
+  let micStream    = null;
+  let rafId        = null;
+  let voiceOn      = false;
+  let pillState    = 'idle'; // synced from pill IPC
+  let orbT         = 0;
 
   // Populate voice name
   api.storeGet('settings').then(s => {
@@ -599,221 +612,214 @@ document.getElementById('open-agent-btn')?.addEventListener('click', () => api.o
     if (el && s && s.voice) el.textContent = s.voice;
   }).catch(() => {});
 
-  // ── 3D sphere renderer ──────────────────────────────────────────
-  function drawOrb(freqArr) {
-    const W = orbCanvas.width, H = orbCanvas.height;
-    const cx = W / 2, cy = H / 2;
-    const R  = 110;
-    oc.clearRect(0, 0, W, H);
+  // ── Fluid blob orb ───────────────────────────────────────────────
+  function drawOrb(freq) {
+    oc.clearRect(0, 0, OW, OH);
+    const cx = OW / 2, cy = OH / 2, R = Math.min(OW, OH) * 0.33;
+    const N   = 180; // points around circle
+    const TAU = Math.PI * 2;
 
-    // Ambient outer glow
-    const outerGlow = oc.createRadialGradient(cx, cy, R * 0.6, cx, cy, R * 1.8);
-    outerGlow.addColorStop(0, 'rgba(0,217,255,0.08)');
-    outerGlow.addColorStop(0.5, 'rgba(168,85,247,0.05)');
-    outerGlow.addColorStop(1, 'transparent');
-    oc.fillStyle = outerGlow;
-    oc.beginPath();
-    oc.arc(cx, cy, R * 1.8, 0, Math.PI * 2);
-    oc.fill();
+    const isActive  = voiceOn || (pillState === 'listening' || pillState === 'speaking' || pillState === 'thinking');
+    const hue       = pillState === 'speaking' ? 160 : pillState === 'thinking' ? 210 : 190;
+    const hue2      = hue + 60;
 
-    // Dark core fill
-    const coreGrd = oc.createRadialGradient(cx - R * 0.25, cy - R * 0.25, 0, cx, cy, R);
-    coreGrd.addColorStop(0, 'rgba(0,30,50,0.95)');
-    coreGrd.addColorStop(0.6, 'rgba(0,10,20,0.98)');
-    coreGrd.addColorStop(1, 'rgba(0,5,12,1)');
-    oc.fillStyle = coreGrd;
-    oc.beginPath();
-    oc.arc(cx, cy, R, 0, Math.PI * 2);
-    oc.fill();
+    // Outer ambient glow
+    const glow = oc.createRadialGradient(cx, cy, 0, cx, cy, R * 2.2);
+    glow.addColorStop(0,   `hsla(${hue},100%,60%,0.06)`);
+    glow.addColorStop(0.5, `hsla(${hue2},90%,50%,0.03)`);
+    glow.addColorStop(1,   'transparent');
+    oc.fillStyle = glow;
+    oc.beginPath(); oc.arc(cx, cy, R * 2.2, 0, TAU); oc.fill();
 
-    // Latitude rings (perspective-flattened ellipses) driven by audio
-    const RINGS = 14;
-    for (let r = 0; r < RINGS; r++) {
-      const phi = (r / (RINGS - 1)) * Math.PI;
-      const sinP = Math.sin(phi);
-      const cosP = Math.cos(phi);
-      const ry = cy + R * cosP * 0.88; // 0.88 = perspective tilt
-      const rx = R * sinP;
-
-      // Map ring to a frequency band
-      const bandIdx = freqArr
-        ? Math.floor((r / RINGS) * freqArr.length * 0.7)
-        : -1;
-      const amp = freqArr ? (freqArr[bandIdx] || 0) / 255 : 0;
-
-      // Idle wobble when no audio
-      const idleAmp = voiceOn ? 0 : (Math.sin(orbT * 1.2 + r * 0.5) * 0.5 + 0.5) * 0.15;
-      const totalAmp = amp + idleAmp;
-
-      const distort = totalAmp * 18 * sinP;
-
-      const alpha = 0.12 + totalAmp * 0.55;
-      const lw    = 0.7 + totalAmp * 2;
-
-      // Hue shift: blue -> cyan -> green when active
-      const hue = voiceOn ? 160 + totalAmp * 60 : 190 + r * 4;
-      oc.beginPath();
-      oc.ellipse(cx, ry, rx + distort, (rx * 0.28) + distort * 0.12, 0, 0, Math.PI * 2);
-      oc.strokeStyle = `hsla(${hue}, 95%, 60%, ${alpha})`;
-      oc.lineWidth = lw;
-      oc.stroke();
+    // Build smooth blob points
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      const angle   = (i / N) * TAU;
+      const freqIdx = freq ? Math.floor((i / N) * freq.length * 0.75) : -1;
+      const amp     = freq ? (freq[freqIdx] || 0) / 255 : 0;
+      const idle    = Math.sin(angle * 2 + orbT) * 4
+                    + Math.sin(angle * 4 - orbT * 0.7) * 2.5
+                    + Math.sin(angle * 7 + orbT * 1.3) * 1.2;
+      const r = R + (isActive ? amp * R * 0.35 : 0) + idle * (isActive ? 0.4 : 1);
+      pts.push({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
     }
 
-    // Longitude arcs
-    const LONGS = 10;
-    for (let l = 0; l < LONGS; l++) {
-      const angle  = (l / LONGS) * Math.PI * 2 + orbT * 0.08;
-      const cosA   = Math.cos(angle);
-      const sinA   = Math.sin(angle);
-      const bandIdx = freqArr
-        ? Math.floor((l / LONGS) * freqArr.length * 0.4)
-        : -1;
-      const amp    = freqArr ? (freqArr[bandIdx] || 0) / 255 : 0;
-      const idleA  = voiceOn ? 0 : (Math.sin(orbT + l) * 0.5 + 0.5) * 0.12;
-      const total  = amp + idleA;
-
-      const STEPS = 48;
-      oc.beginPath();
-      for (let s = 0; s <= STEPS; s++) {
-        const phi = (s / STEPS) * Math.PI;
-        const x   = cx + cosA * R * Math.sin(phi) * (1 + total * 0.12);
-        const y   = cy + R * Math.cos(phi) * 0.88;
-        s === 0 ? oc.moveTo(x, y) : oc.lineTo(x, y);
-      }
-      oc.strokeStyle = `rgba(168,85,247,${0.08 + total * 0.35})`;
-      oc.lineWidth   = 0.6 + total * 1.6;
-      oc.stroke();
+    // Draw smooth closed path using midpoint bezier
+    oc.beginPath();
+    for (let i = 0; i < N; i++) {
+      const a = pts[i], b = pts[(i + 1) % N];
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      if (i === 0) oc.moveTo(mx, my);
+      else         oc.quadraticCurveTo(a.x, a.y, mx, my);
     }
+    oc.closePath();
 
-    // Inner core glow
-    const coreLight = oc.createRadialGradient(cx - R * 0.2, cy - R * 0.22, 0, cx, cy, R * 0.75);
-    const coreAlpha = voiceOn ? 0.28 : 0.16 + Math.sin(orbT) * 0.06;
-    coreLight.addColorStop(0,   `rgba(255,255,255,${coreAlpha * 1.2})`);
-    coreLight.addColorStop(0.3, `rgba(0,217,255,${coreAlpha})`);
-    coreLight.addColorStop(1,   'transparent');
-    oc.fillStyle = coreLight;
-    oc.beginPath();
-    oc.arc(cx, cy, R, 0, Math.PI * 2);
+    // Fill: dark translucent inside
+    const fill = oc.createRadialGradient(cx - R * 0.2, cy - R * 0.25, 0, cx, cy, R * 1.1);
+    fill.addColorStop(0,   `hsla(${hue},80%,18%,0.55)`);
+    fill.addColorStop(0.6, `hsla(${hue},90%,10%,0.7)`);
+    fill.addColorStop(1,   `hsla(${hue},100%,5%,0.8)`);
+    oc.fillStyle = fill;
     oc.fill();
 
-    // Rim glow
-    const rimGrd = oc.createRadialGradient(cx, cy, R * 0.82, cx, cy, R);
-    const rimColor = voiceOn ? '0,255,157' : '0,217,255';
-    rimGrd.addColorStop(0, 'transparent');
-    rimGrd.addColorStop(1, `rgba(${rimColor},0.45)`);
-    oc.fillStyle = rimGrd;
-    oc.beginPath();
-    oc.arc(cx, cy, R, 0, Math.PI * 2);
-    oc.fill();
+    // Stroke: glowing edge
+    oc.save();
+    oc.shadowBlur  = isActive ? 28 : 14;
+    oc.shadowColor = `hsla(${hue},100%,65%,0.8)`;
+    oc.strokeStyle = `hsla(${hue},100%,70%,${isActive ? 0.9 : 0.55})`;
+    oc.lineWidth   = isActive ? 2.2 : 1.4;
+    oc.stroke();
+    oc.restore();
 
-    // Specular highlight
-    const spec = oc.createRadialGradient(cx - R * 0.28, cy - R * 0.28, 0, cx - R * 0.15, cy - R * 0.15, R * 0.38);
-    spec.addColorStop(0, 'rgba(255,255,255,0.22)');
+    // Inner specular highlight
+    const spec = oc.createRadialGradient(cx - R * 0.3, cy - R * 0.3, 0, cx - R * 0.1, cy - R * 0.1, R * 0.55);
+    spec.addColorStop(0, 'rgba(255,255,255,0.18)');
     spec.addColorStop(1, 'transparent');
     oc.fillStyle = spec;
-    oc.beginPath();
-    oc.arc(cx, cy, R, 0, Math.PI * 2);
     oc.fill();
 
-    orbT += 0.025;
+    orbT += isActive ? 0.045 : 0.018;
   }
 
-  // ── Waveform renderer ────────────────────────────────────────────
-  function drawWave(freqArr) {
-    const W = waveCanvas.width, H = waveCanvas.height;
-    wc.clearRect(0, 0, W, H);
-    if (!freqArr) {
-      // Flat idle line
-      wc.strokeStyle = 'rgba(0,217,255,0.15)';
+  // ── Oscilloscope waveform ─────────────────────────────────────────
+  function drawWave(time) {
+    wc.clearRect(0, 0, WW, WH);
+    const mid = WH / 2;
+
+    if (!time) {
+      // Idle: faint flat line
+      wc.strokeStyle = 'rgba(0,217,255,0.18)';
       wc.lineWidth = 1;
-      wc.beginPath();
-      wc.moveTo(0, H / 2);
-      wc.lineTo(W, H / 2);
-      wc.stroke();
+      wc.beginPath(); wc.moveTo(0, mid); wc.lineTo(WW, mid); wc.stroke();
       return;
     }
-    const barW  = W / freqArr.length;
-    const mid   = H / 2;
-    for (let i = 0; i < freqArr.length; i++) {
-      const v   = freqArr[i] / 255;
-      const bH  = Math.max(1, v * H * 0.92);
-      const x   = i * barW;
-      // Cyan -> purple gradient based on position + intensity
-      const hue = 180 + (i / freqArr.length) * 90;
-      const sat = 80 + v * 20;
-      wc.fillStyle = `hsla(${hue},${sat}%,65%,${0.5 + v * 0.5})`;
-      // Mirror: bar goes both up and down from center
-      wc.fillRect(x, mid - bH / 2, Math.max(1, barW - 1), bH);
+
+    const isActive = voiceOn || pillState === 'listening' || pillState === 'speaking';
+    const hue      = pillState === 'speaking' ? 160 : 185;
+
+    wc.beginPath();
+    for (let i = 0; i < time.length; i++) {
+      const x = (i / (time.length - 1)) * WW;
+      const y = mid + ((time[i] - 128) / 128) * mid * 0.85;
+      i === 0 ? wc.moveTo(x, y) : wc.lineTo(x, y);
     }
+
+    // Gradient stroke cyan -> purple
+    const grd = wc.createLinearGradient(0, 0, WW, 0);
+    grd.addColorStop(0,   `hsla(${hue},100%,65%,0.9)`);
+    grd.addColorStop(0.5, `hsla(${hue + 80},90%,65%,0.9)`);
+    grd.addColorStop(1,   `hsla(${hue},100%,65%,0.9)`);
+    wc.save();
+    wc.strokeStyle = grd;
+    wc.lineWidth   = isActive ? 2 : 1.4;
+    wc.lineJoin    = 'round';
+    wc.lineCap     = 'round';
+    wc.shadowBlur  = isActive ? 10 : 4;
+    wc.shadowColor = `hsla(${hue},100%,65%,0.6)`;
+    wc.stroke();
+    wc.restore();
   }
 
-  // ── Main render loop ─────────────────────────────────────────────
+  // ── Render loop ───────────────────────────────────────────────────
   function renderLoop() {
-    let freq = null;
-    if (analyser && freqData) {
-      analyser.getByteFrequencyData(freqData);
+    let freq = null, time = null;
+    if (freqAnalyser && freqData) {
+      freqAnalyser.getByteFrequencyData(freqData);
       freq = freqData;
     }
+    if (timeAnalyser && timeData) {
+      timeAnalyser.getByteTimeDomainData(timeData);
+      time = timeData;
+    }
     drawOrb(freq);
-    drawWave(freq);
+    drawWave(time);
     rafId = requestAnimationFrame(renderLoop);
   }
 
-  // ── Start voice ──────────────────────────────────────────────────
-  startBtn.addEventListener('click', async () => {
-    if (voiceOn) return;
+  // ── Open mic for visualization ────────────────────────────────────
+  async function openMic() {
+    if (audioCtx) return; // already open
     try {
-      // Open mic for visualization
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      micStream = stream;
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       audioCtx  = new AudioContext();
-      const src = audioCtx.createMediaStreamSource(stream);
-      analyser  = audioCtx.createAnalyser();
-      analyser.fftSize = 128;
-      analyser.smoothingTimeConstant = 0.75;
-      freqData  = new Uint8Array(analyser.frequencyBinCount);
-      src.connect(analyser);
+      const src = audioCtx.createMediaStreamSource(micStream);
 
-      voiceOn = true;
-      startBtn.disabled = true;
-      stopBtn.disabled  = false;
-      stateLabel.textContent = 'LISTENING';
-      stateSub.textContent   = 'voice active — speak now';
+      freqAnalyser = audioCtx.createAnalyser();
+      freqAnalyser.fftSize = 256;
+      freqAnalyser.smoothingTimeConstant = 0.82;
+      freqData = new Uint8Array(freqAnalyser.frequencyBinCount);
 
-      // Trigger pill voice
-      api.dashVoiceStart?.();
-    } catch (err) {
+      timeAnalyser = audioCtx.createAnalyser();
+      timeAnalyser.fftSize = 1024;
+      timeAnalyser.smoothingTimeConstant = 0.88;
+      timeData = new Uint8Array(timeAnalyser.frequencyBinCount);
+
+      src.connect(freqAnalyser);
+      src.connect(timeAnalyser);
+    } catch (e) {
       stateLabel.textContent = 'MIC ERROR';
-      stateSub.textContent   = err.message || 'microphone access denied';
+      stateSub.textContent   = e.message || 'mic denied';
     }
-  });
+  }
 
-  // ── Stop voice ───────────────────────────────────────────────────
-  stopBtn.addEventListener('click', () => {
-    if (!voiceOn) return;
+  function closeMic() {
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
     if (audioCtx)  { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
-    analyser = null; freqData = null;
-    voiceOn  = false;
+    freqAnalyser = null; timeAnalyser = null; freqData = null; timeData = null;
+  }
+
+  // ── Start button ──────────────────────────────────────────────────
+  startBtn.addEventListener('click', async () => {
+    if (voiceOn) return;
+    voiceOn = true;
+    startBtn.disabled = true;
+    stopBtn.disabled  = false;
+    stateLabel.textContent = 'LISTENING';
+    stateSub.textContent   = 'voice active — speak now';
+    await openMic();
+    api.dashVoiceStart?.();
+  });
+
+  // ── Stop button ───────────────────────────────────────────────────
+  stopBtn.addEventListener('click', () => {
+    voiceOn = false;
     startBtn.disabled = false;
     stopBtn.disabled  = true;
+    closeMic();
     stateLabel.textContent = 'STANDBY';
     stateSub.textContent   = 'ready for voice interaction';
     api.dashVoiceStop?.();
   });
 
-  // Start render loop immediately (shows idle 3D sphere)
-  renderLoop();
+  // ── Pill state sync (IPC from pill renderer) ──────────────────────
+  window.electronAPI?.onPillState?.(async (state) => {
+    pillState = state;
+    const LABELS = { idle: 'STANDBY', listening: 'LISTENING', thinking: 'PROCESSING', speaking: 'SPEAKING', connecting: 'CONNECTING' };
+    const SUBS   = { idle: 'ready for voice interaction', listening: 'voice active — speak now', thinking: 'aura is thinking…', speaking: 'aura is responding…', connecting: 'connecting…' };
+    stateLabel.textContent = LABELS[state] || state.toUpperCase();
+    stateSub.textContent   = SUBS[state]   || '';
 
-  // Cleanup mic + voice when dashboard window closes
-  window.addEventListener('beforeunload', () => {
-    if (voiceOn) {
-      if (micStream) { micStream.getTracks().forEach(t => t.stop()); }
-      if (audioCtx)  { try { audioCtx.close(); } catch (_) {} }
-      api.dashVoiceStop?.();
+    if (state !== 'idle' && state !== 'connecting') {
+      // Pill is active — open our mic for visualization too
+      if (!audioCtx) await openMic();
+      startBtn.disabled = true;
+      stopBtn.disabled  = false;
+    } else if (state === 'idle' && !voiceOn) {
+      // Pill went idle and dashboard didn't independently start it
+      closeMic();
+      startBtn.disabled = false;
+      stopBtn.disabled  = true;
     }
-    if (rafId) cancelAnimationFrame(rafId);
   });
+
+  // ── Cleanup on window close ───────────────────────────────────────
+  window.addEventListener('beforeunload', () => {
+    closeMic();
+    if (voiceOn) api.dashVoiceStop?.();
+    if (rafId)   cancelAnimationFrame(rafId);
+  });
+
+  renderLoop();
 })();
 
 // ═══════════════════════════════════════════════════════════════════

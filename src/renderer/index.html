@@ -11,7 +11,7 @@
 </head>
 <body>
   <div id="app">
-    <!-- Peek indicator: visible only when pill is edge-hidden and peeking -->
+    <!-- Peek indicator: at bottom of window, visible as 3px glow when pill is edge-hidden -->
     <div id="peek-bar" class="peek-bar hidden"></div>
 
     <!-- ── Collapsed pill ── -->
@@ -24,11 +24,6 @@
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/>
           </svg>
         </div>
-      </div>
-      <!-- Launch wave (full-width, one-time on startup) -->
-      <div id="launch-wave" class="launch-wave hidden">
-        <div id="launch-bars" class="launch-bars"></div>
-        <span class="launch-label">AURA</span>
       </div>
       <div id="pill-wave"></div>
       <button id="expand-btn" class="expand-btn" title="Expand / collapse panel">

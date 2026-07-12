@@ -59,21 +59,6 @@ function createWindow() {
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
 
   mainWindow.on('closed', () => { mainWindow = null; });
-
-  // Launch animation: full-width wave for 2.5s, then collapse to pill
-  mainWindow.webContents.once('did-finish-load', () => {
-    const { width } = screen.getPrimaryDisplay().workAreaSize;
-    mainWindow.setBounds({ x: 0, y: 0, width, height: 68 }, false);
-    mainWindow.webContents.send('launch-wave-start');
-    setTimeout(() => {
-      if (!mainWindow || mainWindow.isDestroyed()) return;
-      mainWindow.webContents.send('launch-wave-end');
-      setTimeout(() => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
-      }, 600);
-    }, 2500);
-  });
 }
 
 function createDashboard() {
@@ -364,14 +349,16 @@ function hidePillEdge() {
   mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, true);
   // Poll cursor position so we can peek-show when user reaches top
   if (!cursorPollTimer) {
+    const pillX = getCenter(COLLAPSED_W);
     cursorPollTimer = setInterval(() => {
       if (!mainWindow || mainWindow.isDestroyed()) { stopCursorPoll(); return; }
-      const { y } = screen.getCursorScreenPoint();
-      if (y <= 4) {
-        mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, false);
+      const { x, y } = screen.getCursorScreenPoint();
+      const overPill = x >= pillX - 20 && x <= pillX + COLLAPSED_W + 20;
+      if (y <= 5 && overPill) {
+        mainWindow.setBounds({ x: pillX, y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, false);
         mainWindow.webContents.send('pill-peeking', true);
-      } else if (y > 70 && isPillHidden) {
-        mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, false);
+      } else if ((y > 70 || !overPill) && isPillHidden) {
+        mainWindow.setBounds({ x: pillX, y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, false);
         mainWindow.webContents.send('pill-peeking', false);
       }
     }, 80);
@@ -485,6 +472,7 @@ ipcMain.on('dash-voice-start', () => { if (mainWindow && !mainWindow.isDestroyed
 ipcMain.on('dash-voice-stop',  () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('deactivate'); });
 ipcMain.on('pill-autohide',    () => hidePillEdge());
 ipcMain.on('pill-show',        () => showPillEdge());
+ipcMain.on('pill-state',       (_e, s) => { if (dashboardWindow && !dashboardWindow.isDestroyed()) dashboardWindow.webContents.send('pill-state', s); });
 ipcMain.on('open-ask',        () => openAsk());
 ipcMain.on('close-ask',       () => askWindow && askWindow.close());
 ipcMain.on('close-clips',     () => clipsWindow && clipsWindow.close());

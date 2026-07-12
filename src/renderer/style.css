@@ -33,25 +33,29 @@ body {
 }
 
 /* ══════════════════════════════════════════════
-   PEEK BAR — visible when pill is edge-hidden
+   PEEK BAR — at bottom of pill window.
+   When pill is edge-hidden (y = -(h-5)), this
+   sits right at screen top edge, visible as glow.
 ══════════════════════════════════════════════ */
 .peek-bar {
   position: fixed;
-  top: 0;
+  bottom: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 80px;
-  height: 3px;
-  border-radius: 0 0 4px 4px;
-  background: linear-gradient(90deg, rgba(139,92,246,0.8), rgba(0,217,255,0.9), rgba(139,92,246,0.8));
-  box-shadow: 0 0 12px rgba(0,217,255,0.6), 0 0 4px rgba(139,92,246,0.5);
+  width: 72px;
+  height: 4px;
+  border-radius: 4px 4px 0 0;
+  background: linear-gradient(90deg, rgba(139,92,246,0.9), rgba(0,217,255,1), rgba(139,92,246,0.9));
+  box-shadow: 0 -4px 16px rgba(0,217,255,0.7), 0 -2px 8px rgba(139,92,246,0.6);
   animation: peekPulse 2s ease-in-out infinite;
   z-index: 9999;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 @keyframes peekPulse {
-  0%,100% { opacity: 0.7; }
-  50%      { opacity: 1; box-shadow: 0 0 20px rgba(0,217,255,0.8), 0 0 8px rgba(139,92,246,0.7); }
+  0%,100% { opacity: 0.75; }
+  50%      { opacity: 1; box-shadow: 0 -6px 24px rgba(0,217,255,0.9), 0 -3px 10px rgba(139,92,246,0.8); }
 }
 
 /* ══════════════════════════════════════════════
@@ -735,81 +739,6 @@ body {
   box-shadow: 0 0 14px rgba(0, 217, 255, 0.28);
 }
 
-/* ══════════════════════════════════════════════
-   LAUNCH WAVE (one-time startup animation)
-══════════════════════════════════════════════ */
-.launch-wave {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  overflow: hidden;
-  background: rgba(6, 8, 18, 0.96);
-  border-radius: 0 0 28px 28px;
-  z-index: 10;
-  padding: 0 80px;
-  justify-content: center;
-}
-
-.launch-wave::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse at 20% 50%, rgba(139,92,246,0.18) 0%, transparent 55%),
-    radial-gradient(ellipse at 80% 50%, rgba(0,217,255,0.14) 0%, transparent 55%);
-  pointer-events: none;
-}
-
-.launch-bars {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  height: 40px;
-  flex: 1;
-}
-
-.launch-bar {
-  flex: 1;
-  border-radius: 3px;
-  background: linear-gradient(to top, rgba(139,92,246,0.7), rgba(0,217,255,1));
-  box-shadow: 0 0 8px rgba(0,217,255,0.5);
-  animation: launchBar var(--d, 0.6s) ease-in-out infinite alternate;
-}
-
-@keyframes launchBar {
-  from { transform: scaleY(0.08); opacity: 0.3; }
-  to   { transform: scaleY(1);    opacity: 1; }
-}
-
-.launch-label {
-  position: absolute;
-  right: 24px;
-  font-family: 'Orbitron', 'Inter', sans-serif;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.36em;
-  color: rgba(255,255,255,0.6);
-  text-shadow: 0 0 16px rgba(0,217,255,0.4);
-  white-space: nowrap;
-  animation: launchLabelPulse 1.2s ease-in-out infinite alternate;
-}
-
-@keyframes launchLabelPulse {
-  from { opacity: 0.5; }
-  to   { opacity: 1; text-shadow: 0 0 24px rgba(0,217,255,0.7); }
-}
-
-/* Fade-out class applied before collapsing */
-.launch-wave.fade-out {
-  animation: launchFadeOut 0.6s ease-out forwards;
-}
-
-@keyframes launchFadeOut {
-  from { opacity: 1; }
-  to   { opacity: 0; }
-}
 
 /* ══════════════════════════════════════════════
    SETTINGS OVERLAY

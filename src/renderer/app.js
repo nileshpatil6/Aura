@@ -64,6 +64,7 @@ let stopVisualizer = null;
 let showingInput   = false;
 let transcriptText = '';
 let autoHideTimer  = null;  // 20s idle -> edge hide
+let isEdgeHidden   = false; // pill is currently at edge
 
 // ──── Icon paths per state ─────────────────────────────────────────────────────
 const MIC_PATH = 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z';
@@ -85,9 +86,11 @@ const STATUS_LABELS = {
 
 // ──── Set state ────────────────────────────────────────────────────────────────
 function setState(state) {
+  if (currentState === state) return;
   currentState = state;
   orbWrap.className = `orb-wrap ${state}`;
   panel.dataset.state = state;
+  window.electronAPI?.sendPillState?.(state);
   const pathEl = orbIcon.querySelector('path');
   if (pathEl) pathEl.setAttribute('d', ICONS[state] || ICONS.idle);
   statusText.textContent = STATUS_LABELS[state];
@@ -174,6 +177,8 @@ function scheduleAutoHide() {
   clearTimeout(autoHideTimer);
   autoHideTimer = setTimeout(() => {
     if (!voiceActive && !isPanelOpen) {
+      isEdgeHidden = true;
+      peekBar.classList.remove('hidden');
       window.electronAPI?.pillAutoHide();
     }
   }, 20000);
@@ -182,7 +187,11 @@ function scheduleAutoHide() {
 function cancelAutoHide() {
   clearTimeout(autoHideTimer);
   autoHideTimer = null;
-  window.electronAPI?.pillShow();
+  if (isEdgeHidden) {
+    isEdgeHidden = false;
+    peekBar.classList.add('hidden');
+    window.electronAPI?.pillShow();
+  }
 }
 
 // ──── Panel open / close (independent of voice) ───────────────────────────────
@@ -299,6 +308,9 @@ expandBtn.addEventListener('click', () => {
 
 closeBtn.addEventListener('click', closeAll);
 
+// Clicking the peek bar cancels edge-hide and restores pill
+peekBar.addEventListener('click', () => cancelAutoHide());
+
 keyboardBtn.addEventListener('click', () => {
   showingInput = !showingInput;
   textInputRow.classList.toggle('hidden', !showingInput);
@@ -334,9 +346,9 @@ if (window.electronAPI) {
   window.electronAPI.onActivate(() => { if (!voiceActive) activateVoice(); });
   window.electronAPI.onDeactivate(() => { if (voiceActive) closeAll(); });
 
-  // Peek indicator: show glowing line when pill is hidden and user nears top
+  // Peek: when cursor is near pill at top, pill slides back; user can click to restore
   window.electronAPI.onPillPeeking?.((isPeeking) => {
-    if (peekBar) peekBar.classList.toggle('hidden', !isPeeking);
+    // Pill is now showing (peeking). Keep peek bar visible so user can click it.
   });
 }
 
@@ -346,36 +358,6 @@ document.addEventListener('mousemove', (e) => {
   const overUI = el && el.id !== 'app' && el !== document.body && el !== document.documentElement;
   window.electronAPI?.setIgnoreMouse(!overUI);
 });
-
-// ──── Launch wave (one-time startup animation) ────────────────────────────────
-(function initLaunchWave() {
-  const launchWave = document.getElementById('launch-wave');
-  const launchBars = document.getElementById('launch-bars');
-  if (!launchWave || !launchBars) return;
-
-  // Build 80 animated bars
-  const BAR_N = 80;
-  for (let i = 0; i < BAR_N; i++) {
-    const b = document.createElement('div');
-    b.className = 'launch-bar';
-    const frac = i / BAR_N;
-    // Staggered delays create a rolling sine-wave feel
-    const delay = (Math.sin(frac * Math.PI * 5) * 0.3 + 0.35).toFixed(3);
-    b.style.setProperty('--d', `${delay}s`);
-    b.style.animationDelay = `${(frac * 0.4).toFixed(3)}s`;
-    launchBars.appendChild(b);
-  }
-
-  if (window.electronAPI?.onLaunchWaveStart) {
-    window.electronAPI.onLaunchWaveStart(() => {
-      launchWave.classList.remove('hidden');
-    });
-    window.electronAPI.onLaunchWaveEnd(() => {
-      launchWave.classList.add('fade-out');
-      setTimeout(() => launchWave.classList.add('hidden'), 620);
-    });
-  }
-})();
 
 // ──── Init ────────────────────────────────────────────────────────────────────
 setState('idle');
