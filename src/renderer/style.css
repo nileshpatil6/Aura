@@ -235,6 +235,33 @@ body {
 .close-btn svg { display: block; }
 
 /* ══════════════════════════════════════════════
+   EXPAND BTN
+══════════════════════════════════════════════ */
+.expand-btn {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(220, 235, 250, 0.45);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+  padding: 0;
+}
+.expand-btn:hover {
+  background: rgba(139, 92, 246, 0.22);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: rgba(220, 235, 250, 0.9);
+}
+.expand-btn svg { display: block; transition: transform 0.25s ease; }
+.expand-btn.open svg { transform: rotate(180deg); }
+
+/* ══════════════════════════════════════════════
    EXPANDED PANEL
 ══════════════════════════════════════════════ */
 .panel {

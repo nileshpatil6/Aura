@@ -18,6 +18,7 @@ const sendBtn         = document.getElementById('send-btn');
 const errorBox        = document.getElementById('error-box');
 const keyboardBtn     = document.getElementById('keyboard-btn');
 const settingsBtn     = document.getElementById('settings-btn');
+const expandBtn       = document.getElementById('expand-btn');
 
 // ──── Build panel visualizer bars ─────────────────────────────────────────────
 const BAR_COUNT = 22;
@@ -54,7 +55,8 @@ for (let i = 0; i < WAVE_COUNT; i++) {
 }
 
 // ──── State ───────────────────────────────────────────────────────────────────
-let isOpen         = false;
+let voiceActive    = false;  // live gemini session active
+let isPanelOpen    = false;  // expanded panel visible
 let currentState   = 'idle';
 let gemini         = null;
 let stopVisualizer = null;
@@ -92,7 +94,7 @@ function setState(state) {
   thinkingAnim.classList.toggle('hidden', state !== 'thinking');
   speakingAnim.classList.toggle('hidden', state !== 'speaking');
 
-  pillWaveEl.classList.toggle('visible', isOpen && state === 'listening');
+  pillWaveEl.classList.toggle('visible', isPanelOpen && state === 'listening');
 }
 
 // ──── Helpers ─────────────────────────────────────────────────────────────────
@@ -165,24 +167,36 @@ document.querySelectorAll('.chip').forEach(btn => {
 });
 
 
-// ──── Open / Close ────────────────────────────────────────────────────────────
-async function openAssistant() {
-  isOpen = true;
+// ──── Panel open / close (independent of voice) ───────────────────────────────
+function openPanel() {
+  isPanelOpen = true;
+  panel.classList.remove('hidden');
+  void panel.offsetWidth;
+  panel.style.animation = 'none';
+  void panel.offsetWidth;
+  panel.style.animation = '';
+  expandBtn.classList.add('open');
+  window.electronAPI?.resizeExpanded();
+}
+
+function closePanel() {
+  isPanelOpen = false;
+  panel.classList.add('hidden');
+  expandBtn.classList.remove('open');
+  showingInput = false;
+  textInputRow.classList.add('hidden');
+  if (!voiceActive) window.electronAPI?.resizeCollapsed();
+}
+
+// ──── Voice activate (orb click) ──────────────────────────────────────────────
+async function activateVoice() {
+  voiceActive = true;
   transcriptText = '';
   transcriptEl.textContent = '';
   transcriptEl.classList.add('hidden');
   userTextEl.classList.add('hidden');
   errorBox.classList.add('hidden');
   closeBtn.classList.remove('hidden');
-
-  panel.classList.remove('hidden');
-  void panel.offsetWidth;
-  panel.style.animation = 'none';
-  void panel.offsetWidth;
-  panel.style.animation = '';
-
-  window.electronAPI?.resizeExpanded();
-
   await ensureConnected();
 }
 
@@ -191,6 +205,8 @@ async function ensureConnected() {
   if (gemini && gemini.connected) return true;
 
   if (!(await hasApiKey())) {
+    voiceActive = false;
+    closeBtn.classList.add('hidden');
     showError('No Gemini API key set — opening dashboard.');
     setState('idle');
     setTimeout(() => window.electronAPI?.openDashboard(), 600);
@@ -214,6 +230,8 @@ async function ensureConnected() {
     await gemini.connect();
     return true;
   } catch (err) {
+    voiceActive = false;
+    closeBtn.classList.add('hidden');
     setState('idle');
     if (err?.message === 'NO_API_KEY') {
       showError('No API key — opening dashboard.');
@@ -225,8 +243,9 @@ async function ensureConnected() {
   }
 }
 
-function closeAssistant() {
-  isOpen = false;
+function closeAll() {
+  voiceActive = false;
+  isPanelOpen = false;
   showingInput = false;
   pillWaveEl.classList.remove('visible');
 
@@ -236,6 +255,7 @@ function closeAssistant() {
   panel.classList.add('hidden');
   textInputRow.classList.add('hidden');
   closeBtn.classList.add('hidden');
+  expandBtn.classList.remove('open');
 
   window.electronAPI?.resizeCollapsed();
   setState('idle');
@@ -243,14 +263,18 @@ function closeAssistant() {
 
 // ──── Event listeners ──────────────────────────────────────────────────────────
 orbWrap.addEventListener('click', async () => {
-  if (!isOpen) {
-    await openAssistant();
+  if (!voiceActive) {
+    await activateVoice();
   } else if (!gemini || !gemini.connected) {
-    // Pill open but disconnected — retry connect
     await ensureConnected();
   }
 });
-closeBtn.addEventListener('click', closeAssistant);
+
+expandBtn.addEventListener('click', () => {
+  if (isPanelOpen) closePanel(); else openPanel();
+});
+
+closeBtn.addEventListener('click', closeAll);
 
 keyboardBtn.addEventListener('click', () => {
   showingInput = !showingInput;
@@ -284,8 +308,8 @@ async function submitText() {
 
 // ──── Electron IPC ────────────────────────────────────────────────────────────
 if (window.electronAPI) {
-  window.electronAPI.onActivate(() => { if (!isOpen) openAssistant(); });
-  window.electronAPI.onDeactivate(() => { if (isOpen) closeAssistant(); });
+  window.electronAPI.onActivate(() => { if (!voiceActive) activateVoice(); });
+  window.electronAPI.onDeactivate(() => { if (voiceActive) closeAll(); });
 }
 
 // ──── Click-through: ignore mouse on transparent areas ────────────────────────

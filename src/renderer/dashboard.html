@@ -42,6 +42,10 @@
     <!-- Sidebar -->
     <aside class="sidebar">
       <nav class="nav">
+        <button class="nav-item" data-tab="voice">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z"/></svg>
+          <span>Voice</span>
+        </button>
         <button class="nav-item active" data-tab="chat">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
           <span>Chat</span>
@@ -85,6 +89,57 @@
 
     <!-- Main content -->
     <main class="main">
+      <!-- VOICE TAB -->
+      <section class="tab tab-voice" data-tab="voice">
+        <div class="voice-arena" id="voice-arena">
+          <!-- HUD corner brackets -->
+          <div class="hud-corner hud-tl"></div>
+          <div class="hud-corner hud-tr"></div>
+          <div class="hud-corner hud-bl"></div>
+          <div class="hud-corner hud-br"></div>
+
+          <!-- Horizontal scan beam -->
+          <div class="scan-beam" id="scan-beam"></div>
+
+          <!-- Central AI sphere -->
+          <div class="ai-sphere-wrap" id="dash-orb-wrap">
+            <div class="sphere-halo sphere-halo-1"></div>
+            <div class="sphere-halo sphere-halo-2"></div>
+            <div class="sphere-halo sphere-halo-3"></div>
+            <div class="ai-sphere" id="dash-orb">
+              <div class="sphere-core-glow"></div>
+              <div class="sphere-surface"></div>
+              <svg class="sphere-sine-wave" id="dash-sine" viewBox="0 0 180 60" preserveAspectRatio="none">
+                <path id="dash-sine-path"
+                  d="M0,30 C15,8 30,52 45,30 C60,8 75,52 90,30 C105,8 120,52 135,30 C150,8 165,52 180,30"
+                  fill="none" stroke="rgba(0,217,255,0.55)" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Status block -->
+          <div class="voice-status-block">
+            <div class="voice-state-label" id="dash-voice-state">STANDBY</div>
+            <div class="voice-state-sub" id="dash-voice-sub">click the orb in the pill to activate</div>
+          </div>
+
+          <!-- Waveform output -->
+          <div class="voice-wave-row" id="dash-voice-wave"></div>
+
+          <!-- HUD side strips -->
+          <div class="hud-strip hud-strip-left">
+            <div class="hud-data"><span class="hud-key">ENGINE</span><span class="hud-val c-cyan">Gemini 3 Flash</span></div>
+            <div class="hud-data"><span class="hud-key">MODE</span><span class="hud-val">LIVE AUDIO</span></div>
+            <div class="hud-data"><span class="hud-key">PROTOCOL</span><span class="hud-val">WebSocket</span></div>
+          </div>
+          <div class="hud-strip hud-strip-right">
+            <div class="hud-data"><span class="hud-key">VOICE</span><span class="hud-val" id="hud-voice-name">--</span></div>
+            <div class="hud-data"><span class="hud-key">CPU</span><span class="hud-val" id="hud-cpu-v">--%</span></div>
+            <div class="hud-data"><span class="hud-key">RAM</span><span class="hud-val" id="hud-ram-v">--%</span></div>
+          </div>
+        </div>
+      </section>
+
       <!-- CHAT TAB -->
       <section class="tab tab-chat active" data-tab="chat">
         <div class="panel-head">
@@ -297,8 +352,8 @@
             <div class="about-row"><span>App</span><span>Aura</span></div>
             <div class="about-row"><span>Version</span><span>1.0.0</span></div>
             <div class="about-row"><span>Live audio</span><span>gemini-3.1-flash-live-preview</span></div>
-            <div class="about-row"><span>Reasoning</span><span>gemini-3.5-flash</span></div>
-            <div class="about-row"><span>Computer use</span><span>gemini-2.5-computer-use</span></div>
+            <div class="about-row"><span>Reasoning</span><span>gemini-3-flash-preview</span></div>
+            <div class="about-row"><span>Computer use</span><span>gemini-3-flash-preview</span></div>
           </div>
         </div>
 

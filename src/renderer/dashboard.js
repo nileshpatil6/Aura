@@ -210,6 +210,8 @@ const systemTab = {
     this.drawCpu();
     document.getElementById('cpu-val').textContent = `${cpuPct}%`;
     document.getElementById('mini-cpu').textContent = `${cpuPct}%`;
+    const hudCpu = document.getElementById('hud-cpu-v');
+    if (hudCpu) hudCpu.textContent = `${cpuPct}%`;
 
     // RAM
     const memInfo = await api.getSystemInfo('memory');
@@ -220,6 +222,8 @@ const systemTab = {
       document.getElementById('ram-sub').textContent = `${mMatch[1]} / ${mMatch[2]} GB`;
       document.getElementById('ram-ring').style.strokeDashoffset = (264 - (264 * pct / 100)).toFixed(0);
       document.getElementById('mini-ram').textContent = `${pct}%`;
+      const hudRam = document.getElementById('hud-ram-v');
+      if (hudRam) hudRam.textContent = `${pct}%`;
     }
 
     // Disk
@@ -563,6 +567,47 @@ visionToggle?.addEventListener('change', async () => {
 });
 
 document.getElementById('open-agent-btn')?.addEventListener('click', () => api.openAgent());
+
+// ═══════════════════════════════════════════════════════════════════
+// VOICE ARENA INIT
+// ═══════════════════════════════════════════════════════════════════
+(function initVoiceArena() {
+  const row = document.getElementById('dash-voice-wave');
+  if (!row) return;
+  const BAR_N = 32;
+  for (let i = 0; i < BAR_N; i++) {
+    const b = document.createElement('div');
+    b.className = 'vwave-bar';
+    const frac = i / BAR_N;
+    const h = 8 + Math.sin(frac * Math.PI) * 28;
+    b.style.height = `${h}px`;
+    b.style.setProperty('--dur', `${(0.4 + Math.random() * 0.6).toFixed(2)}s`);
+    b.style.animationDelay = `${(frac * 0.5).toFixed(2)}s`;
+    row.appendChild(b);
+  }
+
+  // Populate voice name from settings
+  api.storeGet('settings').then(s => {
+    const el = document.getElementById('hud-voice-name');
+    if (el && s && s.voice) el.textContent = s.voice;
+  }).catch(() => {});
+
+  // Animate sine wave inside sphere
+  const sinePath = document.getElementById('dash-sine-path');
+  if (sinePath) {
+    let t = 0;
+    setInterval(() => {
+      t += 0.08;
+      const pts = [];
+      for (let i = 0; i <= 8; i++) {
+        const x = (i / 8) * 180;
+        const y = 30 + Math.sin(i * 0.8 + t) * 16 + Math.sin(i * 1.6 - t * 1.3) * 6;
+        pts.push(i === 0 ? `M${x},${y}` : `L${x},${y}`);
+      }
+      sinePath.setAttribute('d', pts.join(' '));
+    }, 60);
+  }
+})();
 
 // ═══════════════════════════════════════════════════════════════════
 // BOOT
