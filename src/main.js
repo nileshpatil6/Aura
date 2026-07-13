@@ -14,10 +14,11 @@ let tray = null;
 let isVisible = false;
 let actionModeHidden = [];  // windows we hid during action mode
 
-const COLLAPSED_W = 88;
-const COLLAPSED_H = 56;
-const EXPANDED_W  = 380;
-const EXPANDED_H  = 360;
+const COLLAPSED_W  = 88;
+const COLLAPSED_H  = 56;
+const EXPANDED_W   = 380;
+const EXPANDED_H   = 360;
+const PILL_VOICE_W = 172; // wider when waves visible
 
 function getCenter(w) {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
@@ -37,7 +38,7 @@ function createWindow() {
     resizable: false,
     movable: false,
     focusable: true,
-    show: true,
+    show: false,
     hasShadow: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -48,7 +49,7 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  // Always open DevTools when run via `npm start` (no app.isPackaged === unpacked dev)
+  mainWindow.once('ready-to-show', () => mainWindow.show());
   if (!app.isPackaged) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
@@ -345,20 +346,26 @@ let cursorPollTimer = null;
 function hidePillEdge() {
   if (!mainWindow || mainWindow.isDestroyed() || isPillHidden) return;
   isPillHidden = true;
-  // Slide pill up: only 5px visible at top
   mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, true);
-  // Poll cursor position so we can peek-show when user reaches top
   if (!cursorPollTimer) {
     const pillX = getCenter(COLLAPSED_W);
+    let peeking = false;
     cursorPollTimer = setInterval(() => {
       if (!mainWindow || mainWindow.isDestroyed()) { stopCursorPoll(); return; }
       const { x, y } = screen.getCursorScreenPoint();
       const overPill = x >= pillX - 20 && x <= pillX + COLLAPSED_W + 20;
-      if (y <= 5 && overPill) {
-        mainWindow.setBounds({ x: pillX, y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, false);
-        mainWindow.webContents.send('pill-peeking', true);
-      } else if ((y > 70 || !overPill) && isPillHidden) {
+      if (y <= 12 && overPill) {
+        if (!peeking) {
+          peeking = true;
+          mainWindow.setBounds({ x: pillX, y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, false);
+          // Make pill interactive so user can click the peek-bar
+          mainWindow.setIgnoreMouseEvents(false);
+          mainWindow.webContents.send('pill-peeking', true);
+        }
+      } else if (peeking && (y > 80 || !overPill)) {
+        peeking = false;
         mainWindow.setBounds({ x: pillX, y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, false);
+        mainWindow.setIgnoreMouseEvents(true, { forward: true });
         mainWindow.webContents.send('pill-peeking', false);
       }
     }, 80);
@@ -367,11 +374,18 @@ function hidePillEdge() {
 
 function showPillEdge() {
   stopCursorPoll();
-  if (!isPillHidden) return;  // already visible, do nothing
+  if (!isPillHidden) return;
   isPillHidden = false;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
+  // Restore normal click-through behaviour (renderer's mousemove controls this)
+  mainWindow.setIgnoreMouseEvents(true, { forward: true });
   mainWindow.webContents.send('pill-peeking', false);
+}
+
+function voicePillMode() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setBounds({ x: getCenter(PILL_VOICE_W), y: 0, width: PILL_VOICE_W, height: COLLAPSED_H }, true);
 }
 
 function stopCursorPoll() {
@@ -496,9 +510,13 @@ ipcMain.handle('maximize-dashboard', () => {
 });
 
 // Toggle click-through: transparent areas pass clicks to windows below
+// While pill is edge-hidden, the cursor poll owns setIgnoreMouseEvents — skip renderer requests
 ipcMain.on('set-ignore-mouse', (_e, ignore) => {
+  if (isPillHidden) return;
   mainWindow?.setIgnoreMouseEvents(ignore, { forward: true });
 });
+
+ipcMain.on('resize-voice-pill', () => voicePillMode());
 
 async function captureScreen(w = 1280, h = 720) {
   const sources = await desktopCapturer.getSources({

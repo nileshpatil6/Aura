@@ -296,7 +296,7 @@ class GeminiLive {
     this.processor = this.audioCtx.createScriptProcessor(4096, 1, 1);
 
     this.processor.onaudioprocess = (e) => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this._muted) return;
       const data = e.inputBuffer.getChannelData(0);
       const b64 = this.float32ToInt16Base64(data);
       this.ws.send(JSON.stringify({
@@ -638,6 +638,9 @@ class GeminiLive {
       },
     }));
   }
+
+  mute()   { this._muted = true; }
+  unmute() { this._muted = false; }
 
   disconnect() {
     this.stopRecording();

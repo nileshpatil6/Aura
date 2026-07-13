@@ -214,25 +214,36 @@ body {
   initial-value: 0deg;
 }
 
-/* ── Pill mini waveform (shown when open/listening) ── */
+/* ── Pill mini waveform (8 bars, shown when listening/speaking) ── */
 #pill-wave {
   display: flex;
   align-items: center;
   gap: 2px;
   height: 28px;
   opacity: 0;
-  transition: opacity 0.3s;
+  transition: opacity 0.35s ease;
   pointer-events: none;
+  flex-shrink: 0;
 }
 #pill-wave.visible { opacity: 1; }
 .pill-wave-bar {
-  width: 3px;
+  width: 2.5px;
   border-radius: 2px;
-  background: linear-gradient(to top, rgba(139,92,246,0.7), rgba(167,139,250,1));
+  background: linear-gradient(to top, rgba(0,217,255,0.6), rgba(139,92,246,1));
   transition: height 0.06s ease-out;
   min-height: 3px;
-  box-shadow: 0 0 4px rgba(139,92,246,0.5);
+  max-height: 22px;
+  box-shadow: 0 0 4px rgba(0,217,255,0.45);
 }
+
+/* ── Muted orb state ── */
+.orb-wrap.muted .orb-gradient {
+  background: conic-gradient(from 0deg, #374151, #4b5563, #374151) !important;
+  animation: none !important;
+  filter: grayscale(1);
+}
+.orb-wrap.muted .orb-ring { opacity: 0 !important; }
+.orb-wrap.muted .orb-inner { opacity: 0.55; }
 
 /* ══════════════════════════════════════════════
    CLOSE BTN

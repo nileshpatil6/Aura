@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   collapse:        () => ipcRenderer.send('collapse'),
   resizeExpanded:   () => ipcRenderer.send('resize-expanded'),
   resizeCollapsed:  () => ipcRenderer.send('resize-collapsed'),
+  resizeVoicePill:  () => ipcRenderer.send('resize-voice-pill'),
   sendPillState:     (s)  => ipcRenderer.send('pill-state', s),
   onPillState:       (cb) => ipcRenderer.on('pill-state', (_e, s) => cb(s)),
   setIgnoreMouse:  (v) => ipcRenderer.send('set-ignore-mouse', v),

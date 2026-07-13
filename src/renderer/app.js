@@ -30,8 +30,8 @@ for (let i = 0; i < BAR_COUNT; i++) {
   barsEl.appendChild(b);
 }
 
-// ──── Build pill mini waveform bars ───────────────────────────────────────────
-const PILL_BAR_COUNT = 12;
+// ──── Build pill mini waveform bars (8 compact bars) ──────────────────────────
+const PILL_BAR_COUNT = 8;
 const pillBarEls = [];
 for (let i = 0; i < PILL_BAR_COUNT; i++) {
   const b = document.createElement('div');
@@ -56,18 +56,20 @@ for (let i = 0; i < WAVE_COUNT; i++) {
 }
 
 // ──── State ───────────────────────────────────────────────────────────────────
-let voiceActive    = false;  // live gemini session active
-let isPanelOpen    = false;  // expanded panel visible
+let voiceActive    = false;
+let isPanelOpen    = false;
 let currentState   = 'idle';
+let isMuted        = false;
 let gemini         = null;
 let stopVisualizer = null;
 let showingInput   = false;
 let transcriptText = '';
-let autoHideTimer  = null;  // 20s idle -> edge hide
-let isEdgeHidden   = false; // pill is currently at edge
+let autoHideTimer  = null;
+let isEdgeHidden   = false;
 
 // ──── Icon paths per state ─────────────────────────────────────────────────────
 const MIC_PATH = 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z';
+const MIC_MUTED_PATH = 'M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z';
 const ICONS = {
   idle:       MIC_PATH,
   connecting: MIC_PATH,
@@ -88,18 +90,26 @@ const STATUS_LABELS = {
 function setState(state) {
   if (currentState === state) return;
   currentState = state;
-  orbWrap.className = `orb-wrap ${state}`;
+  orbWrap.className = `orb-wrap ${state}${isMuted ? ' muted' : ''}`;
   panel.dataset.state = state;
   window.electronAPI?.sendPillState?.(state);
   const pathEl = orbIcon.querySelector('path');
-  if (pathEl) pathEl.setAttribute('d', ICONS[state] || ICONS.idle);
+  if (pathEl) pathEl.setAttribute('d', isMuted ? MIC_MUTED_PATH : (ICONS[state] || ICONS.idle));
   statusText.textContent = STATUS_LABELS[state];
 
   visualizer.classList.toggle('hidden',   state !== 'listening');
   thinkingAnim.classList.toggle('hidden', state !== 'thinking');
   speakingAnim.classList.toggle('hidden', state !== 'speaking');
 
-  pillWaveEl.classList.toggle('visible', isPanelOpen && state === 'listening');
+  // Show pill wave bars when listening or speaking (regardless of panel state)
+  const isWave = state === 'listening' || state === 'speaking';
+  pillWaveEl.classList.toggle('visible', isWave);
+
+  // Resize pill window based on wave visibility (only when panel is collapsed)
+  if (!isPanelOpen) {
+    if (isWave) window.electronAPI?.resizeVoicePill();
+    else        window.electronAPI?.resizeCollapsed();
+  }
 }
 
 // ──── Helpers ─────────────────────────────────────────────────────────────────
@@ -127,11 +137,11 @@ function onVisualizerBars(bars) {
 
   pillBarEls.forEach((el, i) => {
     const idx = Math.floor((i / PILL_BAR_COUNT) * bars.length);
-    el.style.height = `${Math.max(3, bars[idx] * 0.7)}px`;
+    el.style.height = `${Math.max(3, bars[idx] * 0.75)}px`;
   });
 }
 
-// ──── API key check (stored by dashboard or legacy localStorage) ─────────────
+// ──── API key check ───────────────────────────────────────────────────────────
 async function hasApiKey() {
   let key = '';
   try { key = await window.electronAPI?.storeGet('settings', 'apiKey') || ''; } catch {}
@@ -139,10 +149,8 @@ async function hasApiKey() {
   return !!key;
 }
 
-// Settings button opens the full dashboard (which has the Settings tab)
 settingsBtn.addEventListener('click', () => window.electronAPI?.openDashboard());
 
-// Dashboard button
 const dashboardBtn = document.getElementById('dashboard-btn');
 dashboardBtn?.addEventListener('click', () => window.electronAPI?.openDashboard());
 
@@ -171,7 +179,6 @@ document.querySelectorAll('.chip').forEach(btn => {
   });
 });
 
-
 // ──── Auto-hide helpers ───────────────────────────────────────────────────────
 function scheduleAutoHide() {
   clearTimeout(autoHideTimer);
@@ -194,7 +201,7 @@ function cancelAutoHide() {
   }
 }
 
-// ──── Panel open / close (independent of voice) ───────────────────────────────
+// ──── Panel open / close ──────────────────────────────────────────────────────
 function openPanel() {
   cancelAutoHide();
   isPanelOpen = true;
@@ -213,13 +220,17 @@ function closePanel() {
   expandBtn.classList.remove('open');
   showingInput = false;
   textInputRow.classList.add('hidden');
-  if (!voiceActive) window.electronAPI?.resizeCollapsed();
+  // Return to voice pill width if wave is active, else fully collapse
+  const isWave = currentState === 'listening' || currentState === 'speaking';
+  if (isWave) window.electronAPI?.resizeVoicePill();
+  else        window.electronAPI?.resizeCollapsed();
 }
 
-// ──── Voice activate (orb click) ──────────────────────────────────────────────
+// ──── Voice activate ──────────────────────────────────────────────────────────
 async function activateVoice() {
   cancelAutoHide();
   voiceActive = true;
+  isMuted     = false;
   transcriptText = '';
   transcriptEl.textContent = '';
   transcriptEl.classList.add('hidden');
@@ -229,7 +240,6 @@ async function activateVoice() {
   await ensureConnected();
 }
 
-// Connect (or reconnect) the live API on demand. Surfaces errors visibly.
 async function ensureConnected() {
   if (gemini && gemini.connected) return true;
 
@@ -273,9 +283,10 @@ async function ensureConnected() {
 }
 
 function closeAll() {
-  voiceActive = false;
-  isPanelOpen = false;
-  showingInput = false;
+  voiceActive    = false;
+  isPanelOpen    = false;
+  isMuted        = false;
+  showingInput   = false;
   pillWaveEl.classList.remove('visible');
 
   if (stopVisualizer) { stopVisualizer(); stopVisualizer = null; }
@@ -288,8 +299,6 @@ function closeAll() {
 
   window.electronAPI?.resizeCollapsed();
   setState('idle');
-
-  // After 20s idle, auto-hide pill to edge
   scheduleAutoHide();
 }
 
@@ -297,7 +306,15 @@ function closeAll() {
 orbWrap.addEventListener('click', async () => {
   if (!voiceActive) {
     await activateVoice();
-  } else if (!gemini || !gemini.connected) {
+  } else if (gemini && gemini.connected) {
+    // Toggle mute/unmute
+    isMuted = !isMuted;
+    if (isMuted) gemini.mute(); else gemini.unmute();
+    // Update orb class and icon
+    orbWrap.className = `orb-wrap ${currentState}${isMuted ? ' muted' : ''}`;
+    const pathEl = orbIcon.querySelector('path');
+    if (pathEl) pathEl.setAttribute('d', isMuted ? MIC_MUTED_PATH : (ICONS[currentState] || ICONS.idle));
+  } else {
     await ensureConnected();
   }
 });
@@ -308,7 +325,6 @@ expandBtn.addEventListener('click', () => {
 
 closeBtn.addEventListener('click', closeAll);
 
-// Clicking the peek bar cancels edge-hide and restores pill
 peekBar.addEventListener('click', () => cancelAutoHide());
 
 keyboardBtn.addEventListener('click', () => {
@@ -323,12 +339,9 @@ textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitText
 async function submitText() {
   const txt = textInput.value.trim();
   if (!txt) return;
-
-  // If not yet connected, try to connect first
   if (!gemini || !gemini.connected) {
     const ok = await ensureConnected();
     if (!ok) return;
-    // Give the setup message a beat to land before we send the first text
     await new Promise(r => setTimeout(r, 600));
   }
   if (!gemini || !gemini.connected) {
@@ -345,11 +358,7 @@ async function submitText() {
 if (window.electronAPI) {
   window.electronAPI.onActivate(() => { if (!voiceActive) activateVoice(); });
   window.electronAPI.onDeactivate(() => { if (voiceActive) closeAll(); });
-
-  // Peek: when cursor is near pill at top, pill slides back; user can click to restore
-  window.electronAPI.onPillPeeking?.((isPeeking) => {
-    // Pill is now showing (peeking). Keep peek bar visible so user can click it.
-  });
+  window.electronAPI.onPillPeeking?.(() => {});
 }
 
 // ──── Click-through: ignore mouse on transparent areas ────────────────────────
@@ -361,3 +370,4 @@ document.addEventListener('mousemove', (e) => {
 
 // ──── Init ────────────────────────────────────────────────────────────────────
 setState('idle');
+scheduleAutoHide();
