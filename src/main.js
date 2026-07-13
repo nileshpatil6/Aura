@@ -50,7 +50,9 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
-  if (!app.isPackaged) {
+  // DevTools only when explicitly requested — auto-opening stole focus and
+  // repositioned the pill on every launch (looked like a random-move glitch).
+  if (!app.isPackaged && process.env.AURA_DEVTOOLS) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -398,7 +400,18 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    // Surface the dashboard if not visible, otherwise toggle the pill
+    // Always bring the pill back to its default visible position first —
+    // this is the "interface" the user expects to see on manual relaunch.
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createWindow();
+    } else {
+      stopCursorPoll();
+      isPillHidden = false;
+      mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
+      mainWindow.setIgnoreMouseEvents(true, { forward: true });
+      if (!mainWindow.isVisible()) mainWindow.show();
+    }
+
     if (dashboardWindow && !dashboardWindow.isDestroyed()) {
       if (dashboardWindow.isMinimized()) dashboardWindow.restore();
       dashboardWindow.show();
