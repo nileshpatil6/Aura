@@ -220,14 +220,20 @@ body {
   align-items: center;
   gap: 2px;
   height: 28px;
+  /* collapse to zero width when hidden so buttons stay visible in 88px pill */
+  max-width: 0;
+  overflow: hidden;
   opacity: 0;
-  transition: opacity 0.35s ease;
+  transition: max-width 0.3s ease, opacity 0.3s ease;
   pointer-events: none;
-  flex-shrink: 0;
 }
-#pill-wave.visible { opacity: 1; }
+#pill-wave.visible {
+  max-width: 40px; /* 8 bars × 2.5px + 7 gaps × 2px = 34px — give 6px headroom */
+  opacity: 1;
+}
 .pill-wave-bar {
   width: 2.5px;
+  flex-shrink: 0;
   border-radius: 2px;
   background: linear-gradient(to top, rgba(0,217,255,0.6), rgba(139,92,246,1));
   transition: height 0.06s ease-out;
