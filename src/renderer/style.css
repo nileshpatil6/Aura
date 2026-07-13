@@ -220,15 +220,22 @@ body {
   align-items: center;
   gap: 2px;
   height: 28px;
-  /* collapse to zero width when hidden so buttons stay visible in 88px pill */
+  /* collapse to zero width when hidden so buttons stay visible in 88px pill.
+     Negative margins cancel the parent's flex `gap` on both sides — a
+     zero-width flex child still reserves its neighboring gaps otherwise,
+     which silently added 12px and clipped the expand/close buttons. */
   max-width: 0;
+  margin-left: -6px;
+  margin-right: -6px;
   overflow: hidden;
   opacity: 0;
-  transition: max-width 0.3s ease, opacity 0.3s ease;
+  transition: max-width 0.3s ease, opacity 0.3s ease, margin 0.3s ease;
   pointer-events: none;
 }
 #pill-wave.visible {
   max-width: 40px; /* 8 bars × 2.5px + 7 gaps × 2px = 34px — give 6px headroom */
+  margin-left: 0;
+  margin-right: 0;
   opacity: 1;
 }
 .pill-wave-bar {

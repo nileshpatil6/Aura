@@ -14,11 +14,11 @@ let tray = null;
 let isVisible = false;
 let actionModeHidden = [];  // windows we hid during action mode
 
-const COLLAPSED_W  = 88;
+const COLLAPSED_W  = 96;  // was 88 — a few px of breathing room around orb+expand-btn
 const COLLAPSED_H  = 56;
 const EXPANDED_W   = 380;
 const EXPANDED_H   = 360;
-const PILL_VOICE_W = 172; // wider when waves visible
+const PILL_VOICE_W = 180; // wider when waves visible
 
 function getCenter(w) {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
