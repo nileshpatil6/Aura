@@ -1,4 +1,5 @@
 // ──── DOM refs ────────────────────────────────────────────────────────────────
+const pillEl          = document.getElementById('pill');
 const peekBar         = document.getElementById('peek-bar');
 const closeBtn        = document.getElementById('close-btn');
 const orbWrap         = document.getElementById('orb-wrap');
@@ -43,7 +44,7 @@ for (let i = 0; i < PILL_BAR_COUNT; i++) {
 
 // ──── Build speaking wave bars ─────────────────────────────────────────────────
 const WAVE_COUNT = 24;
-const waveColors = ['#34d399','#06b6d4','#22d3ee','#34d399'];
+const waveColors = ['#8a5230','#d98a4f','#ffb066','#d98a4f'];
 for (let i = 0; i < WAVE_COUNT; i++) {
   const b = document.createElement('div');
   b.className = 'wave-bar';
@@ -104,12 +105,7 @@ function setState(state) {
   // Show pill wave bars when listening or speaking (regardless of panel state)
   const isWave = state === 'listening' || state === 'speaking';
   pillWaveEl.classList.toggle('visible', isWave);
-
-  // Resize pill window based on wave visibility (only when panel is collapsed)
-  if (!isPanelOpen) {
-    if (isWave) window.electronAPI?.resizeVoicePill();
-    else        window.electronAPI?.resizeCollapsed();
-  }
+  syncPillSize(); // ResizeObserver also catches this, but call explicitly for zero-lag response
 }
 
 // ──── Helpers ─────────────────────────────────────────────────────────────────
@@ -129,6 +125,23 @@ function showError(msg) {
   errorBox.textContent = '⚠  ' + msg;
   errorBox.classList.remove('hidden');
 }
+
+// ──── Pill sizing ─────────────────────────────────────────────────────────────
+// The window's actual pixel size is whatever the pill's real content measures
+// out to — never a hardcoded guess. Report it to main on every layout change
+// so the OS window always matches the DOM exactly (fixes clipping for good).
+let pillSizeRaf = null;
+function syncPillSize() {
+  if (isPanelOpen) return; // expanded panel has its own fixed window size
+  if (pillSizeRaf) cancelAnimationFrame(pillSizeRaf);
+  pillSizeRaf = requestAnimationFrame(() => {
+    pillSizeRaf = requestAnimationFrame(() => {
+      const rect = pillEl.getBoundingClientRect();
+      window.electronAPI?.resizePill?.(rect.width, rect.height);
+    });
+  });
+}
+new ResizeObserver(() => syncPillSize()).observe(pillEl);
 
 // ──── Visualizer update ───────────────────────────────────────────────────────
 function onVisualizerBars(bars) {
@@ -220,10 +233,7 @@ function closePanel() {
   expandBtn.classList.remove('open');
   showingInput = false;
   textInputRow.classList.add('hidden');
-  // Return to voice pill width if wave is active, else fully collapse
-  const isWave = currentState === 'listening' || currentState === 'speaking';
-  if (isWave) window.electronAPI?.resizeVoicePill();
-  else        window.electronAPI?.resizeCollapsed();
+  syncPillSize(); // panel hidden doesn't change #pill itself — ResizeObserver won't fire, so call explicitly
 }
 
 // ──── Voice activate ──────────────────────────────────────────────────────────
@@ -297,8 +307,7 @@ function closeAll() {
   closeBtn.classList.add('hidden');
   expandBtn.classList.remove('open');
 
-  window.electronAPI?.resizeCollapsed();
-  setState('idle');
+  setState('idle'); // also syncs pill size back down via syncPillSize()
   scheduleAutoHide();
 }
 
@@ -369,5 +378,5 @@ document.addEventListener('mousemove', (e) => {
 });
 
 // ──── Init ────────────────────────────────────────────────────────────────────
-setState('idle');
+syncPillSize(); // setState('idle') below is a no-op (already the initial state) so size it directly
 scheduleAutoHide();

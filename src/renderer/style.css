@@ -1,31 +1,67 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+/* ══════════════════════════════════════════════════════════════════════════
+   AURA — pill overlay
+   Design system: graphite instrument material + a single molten-copper
+   accent. Deliberately NOT a purple/violet/cyan gradient soup — state is
+   communicated by accent intensity and motion, not a different candy color
+   per state. Two hues only: copper (engaged) and pewter (processing).
+══════════════════════════════════════════════════════════════════════════ */
 
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
-  font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  -moz-osx-font-smoothing: grayscale;
+  font-family: 'Instrument Sans', -apple-system, 'Segoe UI', sans-serif;
   user-select: none;
 }
 
 :root {
-  --c-idle:      #7c6df0;
-  --c-listen:    #a78bfa;
-  --c-think:     #60a5fa;
-  --c-speak:     #34d399;
-  --glass-bg:    rgba(9, 9, 20, 0.92);
-  --glass-border: rgba(139, 92, 246, 0.28);
+  /* Graphite material — layered depths, not flat black */
+  --graphite-950: #0a0a0c;
+  --graphite-900: #131316;
+  --graphite-850: #1a1a1e;
+  --graphite-700: #302f34;
+  --bone:         #ece8e2;
+  --silver:       #b8bcc4;
+  --silver-dim:   #6b6e75;
+
+  /* The one accent: molten copper */
+  --copper:        #d98a4f;
+  --copper-bright: #ffb066;
+  --copper-dim:    #8a5230;
+  --copper-wash:   rgba(217, 138, 79, 0.14);
+
+  /* Secondary functional hue: pewter (processing / busy only) */
+  --pewter:        #93a1b0;
+  --pewter-bright: #c3ccd6;
+  --pewter-wash:   rgba(147, 161, 176, 0.14);
+
+  /* Neutral (idle / muted) */
+  --neutral-wash:  rgba(255, 255, 255, 0.06);
+
+  --glass-bg:           rgba(15, 15, 17, 0.90);
+  --glass-border:       rgba(255, 255, 255, 0.09);
+  --glass-border-bright: rgba(255, 255, 255, 0.15);
+  --danger:             #c9634f;
 }
 
+/* body/#app must always match the REAL window width, never a hardcoded
+   number. The window itself is resized to fit whichever state is showing
+   (pill, voice-pill, or the 380px expanded panel) — see syncPillSize() in
+   app.js. A fixed width here (previously 380px, sized only for the panel)
+   centered the collapsed pill inside an invisible 380px box while the actual
+   window was only ~80px wide, so the pill rendered partly or fully outside
+   the visible viewport. That was the real cause of the pill looking clipped
+   or "cut in half," independent of any per-element sizing fix. */
 body {
   background: transparent;
   overflow: hidden;
-  width: 380px;
+  width: 100%;
 }
 
 #app {
-  width: 380px;
+  width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -33,207 +69,245 @@ body {
 }
 
 /* ══════════════════════════════════════════════
-   PEEK BAR — at bottom of pill window.
-   When pill is edge-hidden (y = -(h-5)), this
-   sits right at screen top edge, visible as glow.
+   PEEK BAR — glowing seam at screen edge when the
+   pill is edge-hidden.
 ══════════════════════════════════════════════ */
 .peek-bar {
   position: fixed;
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 72px;
-  height: 4px;
-  border-radius: 4px 4px 0 0;
-  background: linear-gradient(90deg, rgba(139,92,246,0.9), rgba(0,217,255,1), rgba(139,92,246,0.9));
-  box-shadow: 0 -4px 16px rgba(0,217,255,0.7), 0 -2px 8px rgba(139,92,246,0.6);
-  animation: peekPulse 2s ease-in-out infinite;
+  width: 64px;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(90deg, transparent, var(--copper-bright), transparent);
+  box-shadow: 0 -3px 14px rgba(217, 138, 79, 0.55);
+  animation: peekPulse 2.4s ease-in-out infinite;
   z-index: 9999;
   pointer-events: auto;
   cursor: pointer;
   -webkit-app-region: no-drag;
 }
 @keyframes peekPulse {
-  0%,100% { opacity: 0.75; }
-  50%      { opacity: 1; box-shadow: 0 -6px 24px rgba(0,217,255,0.9), 0 -3px 10px rgba(139,92,246,0.8); }
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; box-shadow: 0 -4px 20px rgba(217, 138, 79, 0.75); }
 }
 
 /* ══════════════════════════════════════════════
-   PILL
+   PILL — a tab of brushed graphite hanging flush
+   from the top edge of the screen.
 ══════════════════════════════════════════════ */
 .pill {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 6px 10px 6px 8px;
+  padding: 7px 10px 7px 8px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-top: none;
-  border-radius: 0 0 28px 28px;
-  backdrop-filter: blur(28px) saturate(1.8);
-  -webkit-backdrop-filter: blur(28px) saturate(1.8);
+  border-radius: 0 0 20px 20px;
+  backdrop-filter: blur(30px) saturate(1.3);
+  -webkit-backdrop-filter: blur(30px) saturate(1.3);
   box-shadow:
-    0 8px 32px rgba(139, 92, 246, 0.18),
-    0 2px 8px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  transition: box-shadow 0.4s ease;
+    0 10px 28px rgba(0, 0, 0, 0.45),
+    0 2px 6px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: box-shadow 0.3s ease;
   -webkit-app-region: drag;
   position: relative;
   overflow: hidden;
 }
 
+/* Fine grain — the material craft detail that separates "flat panel" from
+   "engineered surface." Matches the panel's grain for a unified material. */
 .pill::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at 50% -10%, rgba(139,92,246,0.12) 0%, transparent 70%);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+  opacity: 0.5;
   pointer-events: none;
 }
 
 /* ══════════════════════════════════════════════
-   SIRI ORB
+   ORB — a precision dial, not a glowing blob.
+   Structure: graphite disc + thin rotating accent
+   ring (masked to an annulus, not a filled disc).
 ══════════════════════════════════════════════ */
 .orb-wrap {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
   cursor: pointer;
+  transition: transform 0.12s ease-out;
 }
+.orb-wrap:active { transform: scale(0.93); } /* respond on press, per direct-manipulation feel */
 
-/* Outer glow ring */
-.orb-ring {
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  opacity: 0;
-  transition: opacity 0.4s;
-  pointer-events: none;
-}
-
-/* Spinning gradient background */
-.orb-gradient {
+/* Base disc — matte graphite, not a purple sphere */
+.orb-inner {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: conic-gradient(
-    from var(--rot, 0deg),
-    #8b5cf6, #6366f1, #3b82f6, #06b6d4, #8b5cf6
-  );
-  animation: none;
-  transition: all 0.5s ease;
-  filter: blur(0px);
-}
-
-/* Inner sphere */
-.orb-inner {
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.25) 0%, rgba(255,255,255,0.02) 60%, transparent 100%),
-              radial-gradient(circle at 65% 65%, rgba(0,0,0,0.4) 0%, transparent 60%),
-              linear-gradient(135deg, rgba(180,160,255,0.3) 0%, rgba(100,80,200,0.1) 100%);
-  backdrop-filter: blur(4px);
-  z-index: 2;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255,255,255,0.10) 0%, transparent 55%),
+    radial-gradient(circle at 68% 72%, rgba(0,0,0,0.35) 0%, transparent 60%),
+    linear-gradient(155deg, var(--graphite-700) 0%, var(--graphite-900) 100%);
+  border: 1px solid rgba(255,255,255,0.06);
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.4s;
+  transition: background 0.4s ease;
+}
+
+/* Accent ring — a thin annulus (masked), not a filled circle */
+.orb-gradient {
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--ring-a, var(--silver-dim)), var(--ring-b, var(--silver)), var(--ring-a, var(--silver-dim)));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+          mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
+  transition: opacity 0.4s ease;
+  z-index: 2;
+  opacity: 0.55;
+}
+
+/* Outer bloom — only lights up when engaged */
+.orb-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--glow-color, transparent) 0%, transparent 68%);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .orb-icon {
-  width: 15px;
-  height: 15px;
-  fill: white;
-  opacity: 0.95;
+  width: 14px;
+  height: 14px;
+  fill: var(--bone);
+  opacity: 0.92;
   position: relative;
   z-index: 3;
   transition: all 0.3s;
-  filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
 }
 
-/* ── State: idle ── */
+/* ── State: idle — dim, barely-there, alive but resting ── */
 .orb-wrap.idle .orb-gradient {
-  background: conic-gradient(from 0deg, #6366f1, #7c6df0, #6366f1);
-  filter: blur(0px);
+  --ring-a: rgba(184, 188, 196, 0.25);
+  --ring-b: rgba(184, 188, 196, 0.55);
+  opacity: 0.5;
+  animation: idleBreathe 4.5s ease-in-out infinite;
 }
 .orb-wrap.idle .orb-ring { opacity: 0; }
 
-/* ── State: listening ── */
+@keyframes idleBreathe {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 0.62; }
+}
+
+/* ── State: connecting — pewter, quick spin (transient/busy signal) ── */
+.orb-wrap.connecting .orb-gradient {
+  --ring-a: var(--pewter);
+  --ring-b: var(--pewter-bright);
+  opacity: 0.9;
+  animation: spinRing 0.9s linear infinite;
+}
+.orb-wrap.connecting .orb-ring {
+  --glow-color: var(--pewter-wash);
+  opacity: 1;
+}
+
+/* ── State: listening — copper engages, synced by the waveform beside it ── */
 .orb-wrap.listening .orb-gradient {
-  background: conic-gradient(from var(--rot, 0deg), #a78bfa, #8b5cf6, #6366f1, #818cf8, #a78bfa);
-  animation: spinGradient 3s linear infinite, listenPulse 1.8s ease-in-out infinite;
+  --ring-a: var(--copper-dim);
+  --ring-b: var(--copper-bright);
+  opacity: 1;
+  animation: spinRing 2.6s linear infinite, engagedPulse 1.8s ease-in-out infinite;
 }
 .orb-wrap.listening .orb-ring {
+  --glow-color: var(--copper-wash);
   opacity: 1;
-  background: conic-gradient(from var(--rot, 0deg), rgba(167,139,250,0.4), transparent, rgba(167,139,250,0.4));
-  animation: spinGradient 2s linear infinite;
 }
 
-/* ── State: thinking ── */
+/* ── State: thinking — pewter, slower and steadier than "connecting" ── */
 .orb-wrap.thinking .orb-gradient {
-  background: conic-gradient(from var(--rot, 0deg), #60a5fa, #3b82f6, #818cf8, #60a5fa);
-  animation: spinGradient 1.2s linear infinite;
+  --ring-a: var(--pewter);
+  --ring-b: var(--pewter-bright);
+  opacity: 0.95;
+  animation: spinRing 1.6s linear infinite;
 }
 .orb-wrap.thinking .orb-ring {
+  --glow-color: var(--pewter-wash);
   opacity: 1;
-  background: conic-gradient(from var(--rot, 0deg), rgba(96,165,250,0.35), transparent 50%, rgba(96,165,250,0.35));
-  animation: spinGradient 1s linear infinite;
+  animation: enginePulse 1.1s ease-in-out infinite;
 }
 
-/* ── State: speaking ── */
+/* ── State: speaking — copper, brighter and warmer than listening ── */
 .orb-wrap.speaking .orb-gradient {
-  background: conic-gradient(from var(--rot, 0deg), #34d399, #06b6d4, #22d3ee, #34d399);
-  animation: spinGradient 1.8s linear infinite, speakBreath 0.7s ease-in-out infinite alternate;
+  --ring-a: var(--copper);
+  --ring-b: var(--copper-bright);
+  opacity: 1;
+  animation: spinRing 1.4s linear infinite, engagedPulse 0.7s ease-in-out infinite;
 }
 .orb-wrap.speaking .orb-ring {
+  --glow-color: var(--copper-wash);
   opacity: 1;
-  background: conic-gradient(from var(--rot, 0deg), rgba(52,211,153,0.35), transparent 40%, rgba(6,182,212,0.35));
-  animation: spinGradient 1.5s linear infinite;
 }
 
-@keyframes spinGradient {
-  to { --rot: 360deg; }
+/* ── State: muted — flat neutral, no motion, clearly "off" ── */
+.orb-wrap.muted .orb-gradient {
+  --ring-a: rgba(120, 122, 128, 0.4);
+  --ring-b: rgba(120, 122, 128, 0.4);
+  animation: none !important;
+  opacity: 0.4;
+}
+.orb-wrap.muted .orb-ring { opacity: 0 !important; }
+.orb-wrap.muted .orb-inner { opacity: 0.6; }
+.orb-wrap.muted .orb-icon { opacity: 0.6; }
+
+@keyframes spinRing { to { transform: rotate(360deg); } }
+
+@keyframes engagedPulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.05); }
 }
 
-@keyframes listenPulse {
-  0%, 100% { transform: scale(1); filter: blur(0px); }
-  50%       { transform: scale(1.06); filter: blur(0.3px); }
+@keyframes enginePulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
 }
 
-@keyframes speakBreath {
-  from { transform: scale(1); }
-  to   { transform: scale(1.08); }
-}
-
-@property --rot {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-
-/* ── Pill mini waveform (8 bars, shown when listening/speaking) ── */
+/* ── Pill mini waveform — width changes are instant (no width transition),
+   only opacity fades. This is deliberate: the window's real pixel size is
+   measured live from this element (see app.js syncPillSize()), so animating
+   width independently of the OS window resize caused content to be clipped
+   mid-transition. One animation system, not two fighting each other. ── */
 #pill-wave {
   display: flex;
   align-items: center;
   gap: 2px;
-  height: 28px;
-  /* collapse to zero width when hidden so buttons stay visible in 88px pill.
-     Negative margins cancel the parent's flex `gap` on both sides — a
-     zero-width flex child still reserves its neighboring gaps otherwise,
-     which silently added 12px and clipped the expand/close buttons. */
-  max-width: 0;
+  height: 26px;
+  width: 0;
+  /* Negative margins cancel the parent's flex `gap` on both sides — a
+     zero-width flex child still reserves its neighboring gaps otherwise. */
   margin-left: -6px;
   margin-right: -6px;
   overflow: hidden;
   opacity: 0;
-  transition: max-width 0.3s ease, opacity 0.3s ease, margin 0.3s ease;
+  transition: opacity 0.18s ease;
   pointer-events: none;
 }
 #pill-wave.visible {
-  max-width: 40px; /* 8 bars × 2.5px + 7 gaps × 2px = 34px — give 6px headroom */
+  width: 40px;
   margin-left: 0;
   margin-right: 0;
   opacity: 1;
@@ -242,73 +316,49 @@ body {
   width: 2.5px;
   flex-shrink: 0;
   border-radius: 2px;
-  background: linear-gradient(to top, rgba(0,217,255,0.6), rgba(139,92,246,1));
+  background: linear-gradient(to top, var(--copper-dim), var(--copper-bright));
   transition: height 0.06s ease-out;
   min-height: 3px;
-  max-height: 22px;
-  box-shadow: 0 0 4px rgba(0,217,255,0.45);
+  max-height: 20px;
+  box-shadow: 0 0 4px rgba(217, 138, 79, 0.4);
 }
-
-/* ── Muted orb state ── */
-.orb-wrap.muted .orb-gradient {
-  background: conic-gradient(from 0deg, #374151, #4b5563, #374151) !important;
-  animation: none !important;
-  filter: grayscale(1);
-}
-.orb-wrap.muted .orb-ring { opacity: 0 !important; }
-.orb-wrap.muted .orb-inner { opacity: 0.55; }
 
 /* ══════════════════════════════════════════════
-   CLOSE BTN
+   CLOSE / EXPAND BUTTONS
 ══════════════════════════════════════════════ */
-.close-btn {
-  background: rgba(255,255,255,0.04);
+.close-btn,
+.expand-btn {
+  background: rgba(255,255,255,0.035);
   border: 1px solid rgba(255,255,255,0.08);
-  color: rgba(220, 235, 250, 0.55);
+  color: var(--silver-dim);
   cursor: pointer;
-  width: 20px;
-  height: 20px;
+  width: 19px;
+  height: 19px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  transition: all 0.18s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.1s ease-out;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
   padding: 0;
 }
+.close-btn:active,
+.expand-btn:active { transform: scale(0.88); }
+
 .close-btn:hover {
-  background: rgba(255, 59, 107, 0.2);
-  border-color: rgba(255, 59, 107, 0.5);
-  color: white;
+  background: rgba(201, 99, 79, 0.18);
+  border-color: rgba(201, 99, 79, 0.45);
+  color: var(--bone);
 }
 .close-btn svg { display: block; }
 
-/* ══════════════════════════════════════════════
-   EXPAND BTN
-══════════════════════════════════════════════ */
-.expand-btn {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  color: rgba(220, 235, 250, 0.45);
-  cursor: pointer;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  transition: all 0.2s ease;
-  -webkit-app-region: no-drag;
-  flex-shrink: 0;
-  padding: 0;
-}
 .expand-btn:hover {
-  background: rgba(139, 92, 246, 0.22);
-  border-color: rgba(139, 92, 246, 0.5);
-  color: rgba(220, 235, 250, 0.9);
+  background: var(--copper-wash);
+  border-color: rgba(217, 138, 79, 0.4);
+  color: var(--bone);
 }
-.expand-btn svg { display: block; transition: transform 0.25s ease; }
+.expand-btn svg { display: block; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
 .expand-btn.open svg { transform: rotate(180deg); }
 
 /* ══════════════════════════════════════════════
@@ -319,45 +369,54 @@ body {
   margin-top: 3px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
-  border-radius: 20px;
+  border-radius: 18px;
   padding: 16px 18px 14px;
-  backdrop-filter: blur(28px) saturate(1.8);
-  -webkit-backdrop-filter: blur(28px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.3);
+  -webkit-backdrop-filter: blur(30px) saturate(1.3);
   box-shadow:
-    0 20px 60px rgba(0,0,0,0.6),
-    0 4px 20px rgba(139,92,246,0.15),
-    inset 0 1px 0 rgba(255,255,255,0.07);
+    0 24px 60px rgba(0,0,0,0.55),
+    0 4px 16px rgba(0,0,0,0.4),
+    inset 0 1px 0 rgba(255,255,255,0.09);
   display: flex;
   flex-direction: column;
   gap: 12px;
   position: relative;
   overflow: hidden;
-  animation: panelIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: panelIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Mirrors panelIn's curve on the way out — enter/exit share the same path,
+   per the spatial-consistency principle (symmetric paths). */
+.panel.closing {
+  animation: panelOut 0.22s cubic-bezier(0.4, 0, 0.68, 0.06) both;
 }
 
 @keyframes panelIn {
-  from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+  from { opacity: 0; transform: translateY(-10px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
+@keyframes panelOut {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(-10px) scale(0.97); }
+}
 
-/* Ambient top glow */
 .panel::before {
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 80px;
-  background: radial-gradient(ellipse at 50% 0%, rgba(139,92,246,0.14) 0%, transparent 75%);
+  height: 70px;
+  background: radial-gradient(ellipse at 50% 0%, var(--copper-wash) 0%, transparent 75%);
+  opacity: 0.5;
   pointer-events: none;
 }
 
-/* Noise texture */
 .panel::after {
   content: '';
   position: absolute;
   inset: 0;
-  border-radius: 20px;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
-  opacity: 0.6;
+  border-radius: 18px;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.045'/%3E%3C/svg%3E");
+  opacity: 0.55;
   pointer-events: none;
   mix-blend-mode: overlay;
 }
@@ -371,51 +430,49 @@ body {
   z-index: 1;
 }
 
-/* Mini brand mark — small orb + Orbitron AURA */
 .brand-mini {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 .brand-orb-mini {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 30% 30%, rgba(255,255,255,0.45), transparent 55%),
-    conic-gradient(from 0deg, #00d9ff, #a855f7, #00d9ff);
-  box-shadow: 0 0 10px rgba(0, 217, 255, 0.5);
-  animation: spinMini 4s linear infinite;
+    radial-gradient(circle at 30% 30%, rgba(255,255,255,0.4), transparent 55%),
+    conic-gradient(from 0deg, var(--copper), var(--pewter), var(--copper));
+  box-shadow: 0 0 8px rgba(217, 138, 79, 0.4);
+  animation: spinMini 5s linear infinite;
   flex-shrink: 0;
 }
 @keyframes spinMini { to { transform: rotate(360deg); } }
 
 .brand-name-mini {
-  font-family: 'Orbitron', 'Inter', sans-serif;
-  font-size: 11px;
+  font-family: 'Bricolage Grotesque', 'Instrument Sans', sans-serif;
+  font-size: 12px;
   font-weight: 800;
-  letter-spacing: 0.32em;
-  color: rgba(255,255,255,0.92);
-  text-shadow: 0 0 12px rgba(0, 217, 255, 0.25);
+  letter-spacing: 0.22em;
+  color: var(--bone);
 }
 
-/* Compact status with dot — mono font like dashboard */
+/* Compact status chip — neutral by default, tints per state via JS-driven attr */
 .status-mini {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 3px 9px 3px 7px;
-  background: rgba(0, 217, 255, 0.08);
-  border: 1px solid rgba(0, 217, 255, 0.22);
+  background: var(--neutral-wash);
+  border: 1px solid rgba(255,255,255,0.1);
   border-radius: 100px;
+  transition: background 0.25s ease, border-color 0.25s ease;
 }
 .status-dot-mini {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #00d9ff;
-  box-shadow: 0 0 6px #00d9ff;
-  animation: pulseMini 1.6s ease-in-out infinite;
+  background: var(--silver);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
 }
 @keyframes pulseMini {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -426,58 +483,47 @@ body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   font-weight: 500;
-  color: rgba(0, 217, 255, 0.9);
-  letter-spacing: 0.14em;
+  color: var(--silver);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  transition: color 0.25s ease;
 }
 
-.panel[data-state="connecting"] .status-mini {
-  background: rgba(255,170,0,0.08);
-  border-color: rgba(255,170,0,0.3);
-}
-.panel[data-state="connecting"] .status-dot-mini {
-  background: #ffaa00;
-  box-shadow: 0 0 6px #ffaa00;
-}
-.panel[data-state="connecting"] .status-text { color: rgba(255,170,0,0.95); }
-
-/* Status pill color matches orb state (driven by JS toggling panel.dataset.state) */
+.panel[data-state="connecting"] .status-mini,
 .panel[data-state="thinking"] .status-mini {
-  background: rgba(96,165,250,0.08);
-  border-color: rgba(96,165,250,0.3);
+  background: var(--pewter-wash);
+  border-color: rgba(147, 161, 176, 0.35);
 }
+.panel[data-state="connecting"] .status-dot-mini,
 .panel[data-state="thinking"] .status-dot-mini {
-  background: #60a5fa;
-  box-shadow: 0 0 6px #60a5fa;
+  background: var(--pewter-bright);
+  box-shadow: 0 0 6px var(--pewter);
+  animation: pulseMini 1.3s ease-in-out infinite;
 }
-.panel[data-state="thinking"] .status-text { color: rgba(96,165,250,0.95); }
+.panel[data-state="connecting"] .status-text,
+.panel[data-state="thinking"] .status-text { color: var(--pewter-bright); }
 
+.panel[data-state="listening"] .status-mini,
 .panel[data-state="speaking"] .status-mini {
-  background: rgba(52,211,153,0.08);
-  border-color: rgba(52,211,153,0.3);
+  background: var(--copper-wash);
+  border-color: rgba(217, 138, 79, 0.4);
 }
+.panel[data-state="listening"] .status-dot-mini,
 .panel[data-state="speaking"] .status-dot-mini {
-  background: #34d399;
-  box-shadow: 0 0 6px #34d399;
+  background: var(--copper-bright);
+  box-shadow: 0 0 6px var(--copper);
+  animation: pulseMini 1.6s ease-in-out infinite;
 }
-.panel[data-state="speaking"] .status-text { color: rgba(52,211,153,0.95); }
+.panel[data-state="listening"] .status-text,
+.panel[data-state="speaking"] .status-text { color: var(--copper-bright); }
 
-.panel[data-state="idle"] .status-mini {
-  background: rgba(255,255,255,0.04);
-  border-color: rgba(255,255,255,0.1);
-}
-.panel[data-state="idle"] .status-dot-mini {
-  background: rgba(255,255,255,0.4);
-  box-shadow: none;
-  animation: none;
-}
-.panel[data-state="idle"] .status-text { color: rgba(255,255,255,0.5); }
+.panel[data-state="idle"] .status-dot-mini { animation: none; }
 
 /* ══════════════════════════════════════════════
    VISUALIZER (mic bars)
 ══════════════════════════════════════════════ */
 .visualizer {
-  height: 48px;
+  height: 46px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -489,16 +535,16 @@ body {
   display: flex;
   align-items: center;
   gap: 2.5px;
-  height: 44px;
+  height: 42px;
 }
 
 .bar {
   width: 3.5px;
   border-radius: 3px;
-  background: linear-gradient(to top, rgba(139,92,246,0.6), rgba(167,139,250,1));
+  background: linear-gradient(to top, var(--copper-dim), var(--copper-bright));
   transition: height 0.06s ease-out;
   min-height: 4px;
-  box-shadow: 0 0 6px rgba(139,92,246,0.4);
+  box-shadow: 0 0 5px rgba(217, 138, 79, 0.35);
 }
 
 /* ══════════════════════════════════════════════
@@ -515,19 +561,19 @@ body {
 }
 
 .dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
+  background: var(--pewter);
   animation: dotPop 1.1s ease-in-out infinite;
 }
-
-.dot:nth-child(1) { background: #818cf8; animation-delay: 0s; }
-.dot:nth-child(2) { background: #60a5fa; animation-delay: 0.18s; }
-.dot:nth-child(3) { background: #a78bfa; animation-delay: 0.36s; }
+.dot:nth-child(1) { animation-delay: 0s; }
+.dot:nth-child(2) { animation-delay: 0.18s; background: var(--pewter-bright); }
+.dot:nth-child(3) { animation-delay: 0.36s; }
 
 @keyframes dotPop {
   0%, 100% { transform: scale(0.6) translateY(0);   opacity: 0.35; }
-  45%       { transform: scale(1.2) translateY(-7px); opacity: 1;    }
+  45%       { transform: scale(1.2) translateY(-6px); opacity: 1;    }
   60%       { transform: scale(0.9) translateY(-3px); opacity: 0.9; }
 }
 
@@ -535,7 +581,7 @@ body {
    SPEAKING WAVE
 ══════════════════════════════════════════════ */
 .speaking-anim {
-  height: 48px;
+  height: 46px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -552,6 +598,7 @@ body {
 .wave-bar {
   width: 3.5px;
   border-radius: 3px;
+  background: linear-gradient(to top, var(--copper-dim), var(--copper-bright));
   animation: wavePop 0.55s ease-in-out infinite alternate;
 }
 
@@ -564,29 +611,28 @@ body {
    TRANSCRIPT / USER TEXT
 ══════════════════════════════════════════════ */
 .transcript {
-  background: rgba(255,255,255,0.042);
+  background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 14px;
+  border-radius: 13px;
   padding: 11px 14px;
   font-size: 13px;
   font-weight: 400;
-  color: rgba(255,255,255,0.82);
-  line-height: 1.65;
+  color: rgba(236, 232, 226, 0.85);
+  line-height: 1.6;
   max-height: 110px;
   overflow-y: auto;
   position: relative;
   z-index: 1;
-  transition: all 0.3s;
 }
 
 .user-text {
-  background: rgba(139,92,246,0.1);
-  border: 1px solid rgba(139,92,246,0.18);
-  border-radius: 14px;
+  background: var(--copper-wash);
+  border: 1px solid rgba(217, 138, 79, 0.2);
+  border-radius: 13px;
   padding: 8px 14px;
   font-size: 12px;
   font-style: italic;
-  color: rgba(196,181,253,0.85);
+  color: rgba(255, 208, 168, 0.85);
   position: relative;
   z-index: 1;
 }
@@ -600,64 +646,62 @@ body {
   align-items: center;
   position: relative;
   z-index: 1;
-  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: slideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes slideUp {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
 .text-input {
   flex: 1;
-  background: rgba(255,255,255,0.065);
+  background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 24px;
+  border-radius: 22px;
   padding: 9px 16px;
   font-size: 13px;
   font-weight: 400;
-  color: rgba(255,255,255,0.9);
+  color: var(--bone);
   outline: none;
-  transition: border-color 0.25s, box-shadow 0.25s;
+  transition: border-color 0.2s, box-shadow 0.2s;
   -webkit-app-region: no-drag;
 }
-.text-input::placeholder { color: rgba(255,255,255,0.25); }
+.text-input::placeholder { color: rgba(255,255,255,0.28); }
 .text-input:focus {
-  border-color: rgba(139,92,246,0.55);
-  box-shadow: 0 0 0 3px rgba(139,92,246,0.12);
+  border-color: rgba(217, 138, 79, 0.5);
+  box-shadow: 0 0 0 3px var(--copper-wash);
 }
 
 .send-btn {
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  background: linear-gradient(135deg, var(--copper), var(--copper-dim));
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.18s, opacity 0.18s, box-shadow 0.18s;
+  transition: transform 0.1s ease-out, box-shadow 0.18s ease;
   -webkit-app-region: no-drag;
   flex-shrink: 0;
-  box-shadow: 0 4px 14px rgba(139,92,246,0.4);
+  box-shadow: 0 4px 14px rgba(217, 138, 79, 0.35);
 }
-.send-btn:hover {
-  transform: scale(1.06);
-  box-shadow: 0 6px 20px rgba(139,92,246,0.55);
-}
-.send-btn:active { transform: scale(0.95); }
+.send-btn svg { stroke: #14100b; }
+.send-btn:hover { box-shadow: 0 6px 18px rgba(217, 138, 79, 0.5); }
+.send-btn:active { transform: scale(0.9); }
 
 /* ══════════════════════════════════════════════
    ERROR
 ══════════════════════════════════════════════ */
 .error-box {
-  background: rgba(239,68,68,0.1);
-  border: 1px solid rgba(239,68,68,0.25);
+  background: rgba(201, 99, 79, 0.12);
+  border: 1px solid rgba(201, 99, 79, 0.3);
   border-radius: 12px;
   padding: 9px 13px;
   font-size: 12px;
-  color: #fca5a5;
+  color: #e8ab9d;
   position: relative;
   z-index: 1;
 }
@@ -665,14 +709,6 @@ body {
 /* ══════════════════════════════════════════════
    FOOTER
 ══════════════════════════════════════════════ */
-.panel-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  position: relative;
-  z-index: 1;
-}
-
 .panel-footer {
   display: flex;
   align-items: center;
@@ -685,41 +721,39 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(255,255,255,0.025);
-  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
   border-radius: 8px;
-  color: rgba(220, 235, 250, 0.55);
+  color: var(--silver);
   font-size: 11px;
   font-weight: 500;
   padding: 6px 11px;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.1s ease-out;
   -webkit-app-region: no-drag;
   letter-spacing: 0.02em;
-  font-family: 'Inter', sans-serif;
+  font-family: 'Instrument Sans', sans-serif;
 }
+.footer-btn:active { transform: scale(0.95); }
 .footer-btn svg { display: block; }
 .footer-btn:hover {
-  background: rgba(0, 217, 255, 0.08);
-  color: rgba(0, 217, 255, 1);
-  border-color: rgba(0, 217, 255, 0.28);
+  background: var(--copper-wash);
+  color: var(--copper-bright);
+  border-color: rgba(217, 138, 79, 0.32);
 }
 .footer-btn-primary {
-  background: linear-gradient(135deg, rgba(0,217,255,0.14), rgba(168,85,247,0.14));
-  border-color: rgba(0, 217, 255, 0.32);
-  color: rgba(220, 240, 255, 0.95);
+  background: linear-gradient(135deg, var(--copper-wash), var(--pewter-wash));
+  border-color: rgba(217, 138, 79, 0.3);
+  color: var(--bone);
 }
 .footer-btn-primary:hover {
-  background: linear-gradient(135deg, rgba(0,217,255,0.24), rgba(168,85,247,0.24));
-  border-color: rgba(0, 217, 255, 0.5);
+  background: linear-gradient(135deg, rgba(217,138,79,0.26), rgba(147,161,176,0.2));
+  border-color: rgba(217, 138, 79, 0.5);
   color: white;
-  box-shadow: 0 0 14px rgba(0, 217, 255, 0.25);
 }
-.settings-btn {
-  padding: 6px 8px;
-}
+.settings-btn { padding: 6px 8px; }
 
-/* Quick action chips — professional icon row */
+/* Quick action chips */
 .chip-row {
   display: flex;
   gap: 6px;
@@ -729,40 +763,37 @@ body {
   z-index: 1;
 }
 .chip {
-  width: 30px;
-  height: 30px;
+  width: 29px;
+  height: 29px;
   border-radius: 8px;
-  background: rgba(255,255,255,0.025);
-  border: 1px solid rgba(255,255,255,0.06);
-  color: rgba(220, 235, 250, 0.7);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  color: var(--silver);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.18s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.1s ease-out;
   -webkit-app-region: no-drag;
   padding: 0;
 }
 .chip svg { display: block; }
 .chip:hover {
-  background: rgba(0, 217, 255, 0.08);
-  border-color: rgba(0, 217, 255, 0.28);
-  color: rgba(0, 217, 255, 1);
-  transform: translateY(-1px);
+  background: var(--copper-wash);
+  border-color: rgba(217, 138, 79, 0.3);
+  color: var(--copper-bright);
 }
-.chip:active { transform: translateY(0) scale(0.96); }
+.chip:active { transform: scale(0.92); }
 .chip-pro {
-  background: linear-gradient(135deg, rgba(0,217,255,0.12), rgba(168,85,247,0.12));
-  border-color: rgba(0,217,255,0.28);
-  color: rgba(180, 230, 255, 0.95);
+  background: linear-gradient(135deg, var(--copper-wash), var(--pewter-wash));
+  border-color: rgba(217, 138, 79, 0.28);
+  color: rgba(255, 224, 195, 0.9);
 }
 .chip-pro:hover {
-  background: linear-gradient(135deg, rgba(0,217,255,0.22), rgba(168,85,247,0.22));
-  border-color: rgba(0,217,255,0.5);
+  background: linear-gradient(135deg, rgba(217,138,79,0.24), rgba(147,161,176,0.18));
+  border-color: rgba(217, 138, 79, 0.5);
   color: white;
-  box-shadow: 0 0 14px rgba(0, 217, 255, 0.28);
 }
-
 
 /* ══════════════════════════════════════════════
    SETTINGS OVERLAY
@@ -770,8 +801,8 @@ body {
 .settings-overlay {
   position: absolute;
   inset: 0;
-  border-radius: 20px;
-  background: rgba(9,9,20,0.97);
+  border-radius: 18px;
+  background: rgba(10,10,12,0.97);
   backdrop-filter: blur(20px);
   z-index: 10;
   display: flex;
@@ -782,20 +813,18 @@ body {
 }
 
 .settings-title {
+  font-family: 'Bricolage Grotesque', sans-serif;
   font-size: 14px;
-  font-weight: 600;
-  color: rgba(255,255,255,0.9);
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  color: var(--bone);
 }
 
 .settings-hint {
   font-size: 11px;
-  color: rgba(255,255,255,0.3);
+  color: rgba(255,255,255,0.32);
 }
 
-.settings-link {
-  color: rgba(139,92,246,0.85);
-}
+.settings-link { color: var(--copper-bright); }
 
 .settings-actions {
   display: flex;
@@ -805,20 +834,20 @@ body {
 }
 
 .save-btn {
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  background: linear-gradient(135deg, var(--copper), var(--copper-dim));
   border: none;
   border-radius: 10px;
-  color: white;
+  color: #14100b;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   padding: 6px 16px;
   cursor: pointer;
-  transition: opacity 0.2s, transform 0.15s;
+  transition: opacity 0.2s, transform 0.1s ease-out;
   -webkit-app-region: no-drag;
   letter-spacing: 0.02em;
 }
-.save-btn:hover { opacity: 0.88; }
-.save-btn:active { transform: scale(0.97); }
+.save-btn:hover { opacity: 0.9; }
+.save-btn:active { transform: scale(0.96); }
 
 /* ══════════════════════════════════════════════
    UTILS
@@ -827,5 +856,21 @@ body {
 
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.35); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.55); }
+::-webkit-scrollbar-thumb { background: rgba(217, 138, 79, 0.3); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(217, 138, 79, 0.5); }
+
+/* ══════════════════════════════════════════════
+   ACCESSIBILITY — reduced motion / transparency
+══════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  .orb-gradient, .orb-ring, .brand-orb-mini, .status-dot-mini,
+  .dot, .wave-bar, .peek-bar, .orb-wrap.idle .orb-gradient {
+    animation: none !important;
+  }
+  .panel, .text-input-row { animation: opacity 0.15s ease !important; }
+  .expand-btn svg { transition: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .pill, .panel { background: var(--graphite-950); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}

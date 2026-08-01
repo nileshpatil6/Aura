@@ -14,11 +14,18 @@ let tray = null;
 let isVisible = false;
 let actionModeHidden = [];  // windows we hid during action mode
 
-const COLLAPSED_W  = 96;  // was 88 — a few px of breathing room around orb+expand-btn
+const COLLAPSED_W  = 96;  // initial guess only — renderer reports its real size once painted
 const COLLAPSED_H  = 56;
 const EXPANDED_W   = 380;
 const EXPANDED_H   = 360;
-const PILL_VOICE_W = 180; // wider when waves visible
+
+// The pill's true width is whatever its own content measures out to, reported
+// live by the renderer via the 'resize-pill' IPC. This replaces a history of
+// hardcoded pixel constants that drifted out of sync with the actual markup
+// every time a button or waveform was added, clipping the pill. Main.js never
+// guesses layout again — it just paints whatever width the DOM says it needs.
+let currentPillW = COLLAPSED_W;
+let currentPillH = COLLAPSED_H;
 
 function getCenter(w) {
   const { width } = screen.getPrimaryDisplay().workAreaSize;
@@ -338,7 +345,17 @@ function expandWindow() {
 
 function collapseWindow() {
   if (!mainWindow) return;
-  mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
+  mainWindow.setBounds({ x: getCenter(currentPillW), y: 0, width: currentPillW, height: currentPillH }, true);
+}
+
+// The renderer measures its own real content size (getBoundingClientRect on
+// #pill, after layout settles) and reports it here. This is the single
+// source of truth for pill dimensions — no more guessed pixel constants.
+function setPillSize(w, h) {
+  currentPillW = Math.max(1, Math.ceil(w));
+  currentPillH = Math.max(1, Math.ceil(h));
+  if (!mainWindow || mainWindow.isDestroyed() || isPillHidden) return;
+  mainWindow.setBounds({ x: getCenter(currentPillW), y: 0, width: currentPillW, height: currentPillH }, true);
 }
 
 // ── Auto-hide pill at top edge ────────────────────────────────────────────────
@@ -348,25 +365,25 @@ let cursorPollTimer = null;
 function hidePillEdge() {
   if (!mainWindow || mainWindow.isDestroyed() || isPillHidden) return;
   isPillHidden = true;
-  mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, true);
+  mainWindow.setBounds({ x: getCenter(currentPillW), y: -(currentPillH - 5), width: currentPillW, height: currentPillH }, true);
   if (!cursorPollTimer) {
-    const pillX = getCenter(COLLAPSED_W);
     let peeking = false;
     cursorPollTimer = setInterval(() => {
       if (!mainWindow || mainWindow.isDestroyed()) { stopCursorPoll(); return; }
+      const pillX = getCenter(currentPillW);
       const { x, y } = screen.getCursorScreenPoint();
-      const overPill = x >= pillX - 20 && x <= pillX + COLLAPSED_W + 20;
+      const overPill = x >= pillX - 20 && x <= pillX + currentPillW + 20;
       if (y <= 12 && overPill) {
         if (!peeking) {
           peeking = true;
-          mainWindow.setBounds({ x: pillX, y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, false);
+          mainWindow.setBounds({ x: pillX, y: 0, width: currentPillW, height: currentPillH }, false);
           // Make pill interactive so user can click the peek-bar
           mainWindow.setIgnoreMouseEvents(false);
           mainWindow.webContents.send('pill-peeking', true);
         }
       } else if (peeking && (y > 80 || !overPill)) {
         peeking = false;
-        mainWindow.setBounds({ x: pillX, y: -(COLLAPSED_H - 5), width: COLLAPSED_W, height: COLLAPSED_H }, false);
+        mainWindow.setBounds({ x: pillX, y: -(currentPillH - 5), width: currentPillW, height: currentPillH }, false);
         mainWindow.setIgnoreMouseEvents(true, { forward: true });
         mainWindow.webContents.send('pill-peeking', false);
       }
@@ -379,15 +396,10 @@ function showPillEdge() {
   if (!isPillHidden) return;
   isPillHidden = false;
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
+  mainWindow.setBounds({ x: getCenter(currentPillW), y: 0, width: currentPillW, height: currentPillH }, true);
   // Restore normal click-through behaviour (renderer's mousemove controls this)
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
   mainWindow.webContents.send('pill-peeking', false);
-}
-
-function voicePillMode() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.setBounds({ x: getCenter(PILL_VOICE_W), y: 0, width: PILL_VOICE_W, height: COLLAPSED_H }, true);
 }
 
 function stopCursorPoll() {
@@ -407,7 +419,7 @@ if (!gotLock) {
     } else {
       stopCursorPoll();
       isPillHidden = false;
-      mainWindow.setBounds({ x: getCenter(COLLAPSED_W), y: 0, width: COLLAPSED_W, height: COLLAPSED_H }, true);
+      mainWindow.setBounds({ x: getCenter(currentPillW), y: 0, width: currentPillW, height: currentPillH }, true);
       mainWindow.setIgnoreMouseEvents(true, { forward: true });
       if (!mainWindow.isVisible()) mainWindow.show();
     }
@@ -491,7 +503,8 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 
 ipcMain.on('collapse', () => { collapseWindow(); isVisible = false; });
 ipcMain.on('resize-expanded', () => expandWindow());
-ipcMain.on('resize-collapsed', () => collapseWindow());
+// Renderer reports its own measured pill size — see setPillSize() for why.
+ipcMain.on('resize-pill', (_e, { width, height }) => setPillSize(width, height));
 
 ipcMain.on('open-dashboard',  () => createDashboard());
 ipcMain.on('close-dashboard', () => dashboardWindow && dashboardWindow.close());
@@ -528,8 +541,6 @@ ipcMain.on('set-ignore-mouse', (_e, ignore) => {
   if (isPillHidden) return;
   mainWindow?.setIgnoreMouseEvents(ignore, { forward: true });
 });
-
-ipcMain.on('resize-voice-pill', () => voicePillMode());
 
 async function captureScreen(w = 1280, h = 720) {
   const sources = await desktopCapturer.getSources({
