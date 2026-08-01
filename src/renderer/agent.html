@@ -5,22 +5,22 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob: fonts.googleapis.com fonts.gstatic.com;" />
 <title>Aura Agent</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@500;700;900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, sans-serif; }
-  html, body { background: transparent; height: 100%; overflow: hidden; -webkit-font-smoothing: antialiased; user-select: none; color: #e6f0ff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Instrument Sans', -apple-system, sans-serif; }
+  html, body { background: transparent; height: 100%; overflow: hidden; -webkit-font-smoothing: antialiased; user-select: none; color: #ece8e2; }
 
   :root {
-    --bg: rgba(8, 12, 22, 0.92);
-    --cyan: #00d9ff;
-    --purple: #a855f7;
-    --green: #00ff9d;
-    --red: #ff3b6b;
-    --orange: #ffaa00;
-    --border: rgba(0, 217, 255, 0.18);
-    --border-bright: rgba(0, 217, 255, 0.38);
+    --bg: rgba(13, 13, 15, 0.92);
+    --cyan: #d98a4f;
+    --purple: #93a1b0;
+    --green: #7fb08a;
+    --red: #c9634f;
+    --orange: #d9a94f;
+    --border: rgba(217, 138, 79, 0.18);
+    --border-bright: rgba(217, 138, 79, 0.38);
     --mono: 'JetBrains Mono', monospace;
-    --display: 'Orbitron', sans-serif;
+    --display: 'Bricolage Grotesque', sans-serif;
   }
 
   .shell {
@@ -30,7 +30,7 @@
     backdrop-filter: blur(40px) saturate(2);
     border: 1px solid var(--border);
     border-radius: 18px;
-    box-shadow: 0 30px 90px rgba(0,0,0,0.8), 0 0 60px rgba(0,217,255,0.12);
+    box-shadow: 0 30px 90px rgba(0,0,0,0.8), 0 0 60px rgba(217,138,79,0.12);
     display: grid;
     grid-template-rows: 56px 1fr;
     overflow: hidden;
@@ -40,8 +40,8 @@
   .shell::before {
     content: ''; position: absolute; inset: 0;
     background-image:
-      linear-gradient(rgba(0,217,255,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,217,255,0.03) 1px, transparent 1px);
+      linear-gradient(rgba(217,138,79,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(217,138,79,0.03) 1px, transparent 1px);
     background-size: 40px 40px;
     pointer-events: none;
     mask-image: radial-gradient(ellipse at center, black 0%, transparent 80%);
@@ -62,8 +62,8 @@
   .brand-orb {
     width: 22px; height: 22px;
     border-radius: 50%;
-    background: conic-gradient(from 0deg, #00d9ff, #a855f7, #00d9ff);
-    box-shadow: 0 0 16px rgba(0,217,255,0.5);
+    background: conic-gradient(from 0deg, #d98a4f, #93a1b0, #d98a4f);
+    box-shadow: 0 0 16px rgba(217,138,79,0.5);
     animation: spin 4s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -87,7 +87,7 @@
     margin-left: auto;
     display: flex; align-items: center; gap: 8px;
     padding: 5px 14px 5px 12px;
-    background: rgba(0,217,255,0.08);
+    background: rgba(217,138,79,0.08);
     border: 1px solid var(--border-bright);
     border-radius: 100px;
     font-family: var(--mono);
@@ -100,18 +100,18 @@
     background: var(--cyan);
     box-shadow: 0 0 8px var(--cyan);
   }
-  .status-pill.running { color: var(--orange); border-color: rgba(255,170,0,0.4); background: rgba(255,170,0,0.08); }
+  .status-pill.running { color: var(--orange); border-color: rgba(217,169,79,0.4); background: rgba(217,169,79,0.08); }
   .status-pill.running .dot { background: var(--orange); box-shadow: 0 0 8px var(--orange); animation: pulse 0.8s ease-in-out infinite; }
-  .status-pill.done    { color: var(--green); border-color: rgba(0,255,157,0.4); background: rgba(0,255,157,0.08); }
+  .status-pill.done    { color: var(--green); border-color: rgba(127,176,138,0.4); background: rgba(127,176,138,0.08); }
   .status-pill.done    .dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
-  .status-pill.error   { color: var(--red); border-color: rgba(255,59,107,0.4); background: rgba(255,59,107,0.08); }
+  .status-pill.error   { color: var(--red); border-color: rgba(201,99,79,0.4); background: rgba(201,99,79,0.08); }
   .status-pill.error   .dot { background: var(--red); }
   @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } }
 
   .wc { display: flex; -webkit-app-region: no-drag; margin-left: 16px; }
   .wc button { width: 32px; height: 32px; color: rgba(150,170,200,0.6); background: transparent; border: none; border-radius: 6px; cursor: pointer; }
   .wc button:hover { background: rgba(255,255,255,0.06); color: white; }
-  .wc .close:hover { background: rgba(255,59,107,0.6); }
+  .wc .close:hover { background: rgba(201,99,79,0.6); }
 
   /* Layout */
   .body {
@@ -166,15 +166,15 @@
   }
   .example {
     padding: 5px 12px;
-    background: rgba(168, 85, 247, 0.08);
-    border: 1px solid rgba(168, 85, 247, 0.22);
+    background: rgba(147,161,176, 0.08);
+    border: 1px solid rgba(147,161,176, 0.22);
     color: rgba(220, 200, 250, 0.9);
     font-size: 11px;
     border-radius: 100px;
     cursor: pointer;
     transition: all 0.18s;
   }
-  .example:hover { background: rgba(168, 85, 247, 0.18); border-color: rgba(168, 85, 247, 0.45); }
+  .example:hover { background: rgba(147,161,176, 0.18); border-color: rgba(147,161,176, 0.45); }
 
   .controls {
     display: flex;
@@ -193,15 +193,15 @@
     border: none;
     border-radius: 12px;
     cursor: pointer;
-    box-shadow: 0 6px 24px rgba(0, 217, 255, 0.3);
+    box-shadow: 0 6px 24px rgba(217,138,79, 0.3);
     transition: all 0.2s;
   }
-  .btn-go:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(0, 217, 255, 0.5); }
+  .btn-go:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(217,138,79, 0.5); }
   .btn-go:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
   .btn-stop {
     padding: 13px 22px;
-    background: rgba(255, 59, 107, 0.12);
-    border: 1px solid rgba(255, 59, 107, 0.35);
+    background: rgba(201,99,79, 0.12);
+    border: 1px solid rgba(201,99,79, 0.35);
     color: var(--red);
     font-size: 12px;
     font-weight: 600;
@@ -211,7 +211,7 @@
     cursor: pointer;
     transition: all 0.2s;
   }
-  .btn-stop:hover { background: rgba(255, 59, 107, 0.25); }
+  .btn-stop:hover { background: rgba(201,99,79, 0.25); }
 
   /* Plan/steps */
   .plan-h {
@@ -242,7 +242,7 @@
   .step .num {
     width: 24px; height: 24px;
     border-radius: 50%;
-    background: rgba(0, 217, 255, 0.1);
+    background: rgba(217,138,79, 0.1);
     border: 1px solid var(--border);
     color: var(--cyan);
     display: flex;
@@ -254,14 +254,14 @@
   }
   .step .desc { color: rgba(230, 240, 255, 0.85); }
   .step .stat { font-family: var(--mono); font-size: 10px; color: rgba(150,170,200,0.5); }
-  .step.active { background: rgba(255, 170, 0, 0.08); border-color: rgba(255, 170, 0, 0.4); }
-  .step.active .num { background: rgba(255, 170, 0, 0.2); border-color: rgba(255, 170, 0, 0.5); color: var(--orange); animation: pulse 1s infinite; }
-  .step.done { border-color: rgba(0, 255, 157, 0.25); }
-  .step.done .num { background: rgba(0, 255, 157, 0.18); color: var(--green); border-color: rgba(0, 255, 157, 0.5); }
+  .step.active { background: rgba(217,169,79, 0.08); border-color: rgba(217,169,79, 0.4); }
+  .step.active .num { background: rgba(217,169,79, 0.2); border-color: rgba(217,169,79, 0.5); color: var(--orange); animation: pulse 1s infinite; }
+  .step.done { border-color: rgba(127,176,138, 0.25); }
+  .step.done .num { background: rgba(127,176,138, 0.18); color: var(--green); border-color: rgba(127,176,138, 0.5); }
   .step.done .num::before { content: '✓'; }
   .step.done .num { font-size: 12px; }
-  .step.fail { border-color: rgba(255, 59, 107, 0.3); }
-  .step.fail .num { background: rgba(255, 59, 107, 0.18); color: var(--red); }
+  .step.fail { border-color: rgba(201,99,79, 0.3); }
+  .step.fail .num { background: rgba(201,99,79, 0.18); color: var(--red); }
 
   /* Log */
   .log {
@@ -276,7 +276,7 @@
     overflow-y: auto;
     line-height: 1.7;
   }
-  .log .ts { color: rgba(0,217,255,0.5); margin-right: 6px; }
+  .log .ts { color: rgba(217,138,79,0.5); margin-right: 6px; }
 
   /* Right: live preview */
   .right {
@@ -307,7 +307,7 @@
     width: 100%;
     border-radius: 6px;
     display: block;
-    border: 1px solid rgba(0,217,255,0.1);
+    border: 1px solid rgba(217,138,79,0.1);
   }
   .frame-meta {
     font-family: var(--mono);
@@ -319,7 +319,7 @@
   }
 
   ::-webkit-scrollbar { width: 5px; }
-  ::-webkit-scrollbar-thumb { background: rgba(0,217,255,0.25); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb { background: rgba(217,138,79,0.25); border-radius: 2px; }
 </style>
 </head>
 <body>

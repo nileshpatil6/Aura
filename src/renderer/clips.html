@@ -5,18 +5,18 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https: fonts.googleapis.com fonts.gstatic.com;" />
 <title>Clipboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; font-family:'Inter',sans-serif; }
+  * { margin:0; padding:0; box-sizing:border-box; font-family:'Instrument Sans',sans-serif; }
   html, body { background: transparent; height:100%; overflow:hidden; -webkit-font-smoothing:antialiased; user-select:none; }
   .wrap {
     width: 460px;
     margin: 30px auto;
     background: rgba(10,14,24,0.85);
-    border: 1px solid rgba(0,217,255,0.28);
+    border: 1px solid rgba(217,138,79,0.28);
     border-radius: 18px;
     backdrop-filter: blur(40px);
-    box-shadow: 0 20px 60px rgba(0,0,0,0.7), 0 0 50px rgba(0,217,255,0.15);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.7), 0 0 50px rgba(217,138,79,0.15);
     overflow: hidden;
     animation: dropIn 0.3s cubic-bezier(0.16,1,0.3,1) both;
   }
@@ -27,12 +27,12 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    border-bottom: 1px solid rgba(0,217,255,0.12);
+    border-bottom: 1px solid rgba(217,138,79,0.12);
   }
   .head .icon {
     width: 24px; height: 24px;
     border-radius: 6px;
-    background: linear-gradient(135deg, #00d9ff, #a855f7);
+    background: linear-gradient(135deg, #d98a4f, #93a1b0);
     display: flex; align-items: center; justify-content: center;
     color: white; font-size: 13px;
   }
@@ -65,12 +65,12 @@
     user-select: text;
   }
   .item:hover {
-    background: rgba(0,217,255,0.08);
-    border-color: rgba(0,217,255,0.22);
+    background: rgba(217,138,79,0.08);
+    border-color: rgba(217,138,79,0.22);
   }
   .item .label {
     font-size: 11px;
-    color: #00d9ff;
+    color: #d98a4f;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -105,7 +105,7 @@
   }
 
   ::-webkit-scrollbar { width: 4px; }
-  ::-webkit-scrollbar-thumb { background: rgba(0,217,255,0.25); border-radius:2px; }
+  ::-webkit-scrollbar-thumb { background: rgba(217,138,79,0.25); border-radius:2px; }
 </style>
 </head>
 <body>

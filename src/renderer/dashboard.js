@@ -287,7 +287,7 @@ const systemTab = {
     const w = canvas.width, h = canvas.height;
     ctx.clearRect(0, 0, w, h);
     // Grid
-    ctx.strokeStyle = 'rgba(0,217,255,0.06)';
+    ctx.strokeStyle = 'rgba(217,138,79,0.06)';
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
       const y = (h / 4) * i;
@@ -295,9 +295,9 @@ const systemTab = {
     }
     // Line
     const step = w / (this.cpuHistory.length - 1);
-    ctx.strokeStyle = '#00d9ff';
+    ctx.strokeStyle = '#d98a4f';
     ctx.lineWidth = 2;
-    ctx.shadowColor = '#00d9ff';
+    ctx.shadowColor = '#d98a4f';
     ctx.shadowBlur = 6;
     ctx.beginPath();
     this.cpuHistory.forEach((v, i) => {
@@ -310,8 +310,8 @@ const systemTab = {
     // Fill
     ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, 'rgba(0,217,255,0.32)');
-    grad.addColorStop(1, 'rgba(0,217,255,0)');
+    grad.addColorStop(0, 'rgba(217,138,79,0.32)');
+    grad.addColorStop(1, 'rgba(217,138,79,0)');
     ctx.fillStyle = grad;
     ctx.fill();
   },
@@ -348,7 +348,7 @@ const macrosTab = {
       actions.innerHTML = `
         <button class="btn-primary run" data-id="${m.id}">Run</button>
         <button class="btn-ghost edit" data-id="${m.id}">Edit</button>
-        <button class="btn-ghost del" data-id="${m.id}" style="color:var(--red);border-color:rgba(255,59,107,0.3)">×</button>`;
+        <button class="btn-ghost del" data-id="${m.id}" style="color:var(--red);border-color:rgba(201,99,79,0.3)">×</button>`;
       card.append(name, desc, actions);
       grid.appendChild(card);
     });
@@ -619,9 +619,11 @@ document.getElementById('open-agent-btn')?.addEventListener('click', () => api.o
     const N   = 180; // points around circle
     const TAU = Math.PI * 2;
 
+    // Same two-hue system as the pill: copper (engaged) and pewter
+    // (processing) — never a rainbow of state colors.
     const isActive  = voiceOn || (pillState === 'listening' || pillState === 'speaking' || pillState === 'thinking');
-    const hue       = pillState === 'speaking' ? 160 : pillState === 'thinking' ? 210 : 190;
-    const hue2      = hue + 60;
+    const hue       = pillState === 'speaking' ? 35 : pillState === 'thinking' ? 205 : 28;
+    const hue2      = hue + 12; // tonal variation, not a hue jump to a different family
 
     // Outer ambient glow
     const glow = oc.createRadialGradient(cx, cy, 0, cx, cy, R * 2.2);
@@ -688,14 +690,14 @@ document.getElementById('open-agent-btn')?.addEventListener('click', () => api.o
 
     if (!time) {
       // Idle: faint flat line
-      wc.strokeStyle = 'rgba(0,217,255,0.18)';
+      wc.strokeStyle = 'rgba(217,138,79,0.18)';
       wc.lineWidth = 1;
       wc.beginPath(); wc.moveTo(0, mid); wc.lineTo(WW, mid); wc.stroke();
       return;
     }
 
     const isActive = voiceOn || pillState === 'listening' || pillState === 'speaking';
-    const hue      = pillState === 'speaking' ? 160 : 185;
+    const hue      = pillState === 'speaking' ? 35 : 28;
 
     wc.beginPath();
     for (let i = 0; i < time.length; i++) {
@@ -704,11 +706,11 @@ document.getElementById('open-agent-btn')?.addEventListener('click', () => api.o
       i === 0 ? wc.moveTo(x, y) : wc.lineTo(x, y);
     }
 
-    // Gradient stroke cyan -> purple
+    // Gradient stroke — tonal copper variation, not a hue jump
     const grd = wc.createLinearGradient(0, 0, WW, 0);
-    grd.addColorStop(0,   `hsla(${hue},100%,65%,0.9)`);
-    grd.addColorStop(0.5, `hsla(${hue + 80},90%,65%,0.9)`);
-    grd.addColorStop(1,   `hsla(${hue},100%,65%,0.9)`);
+    grd.addColorStop(0,   `hsla(${hue},70%,58%,0.9)`);
+    grd.addColorStop(0.5, `hsla(${hue + 12},85%,68%,0.9)`);
+    grd.addColorStop(1,   `hsla(${hue},70%,58%,0.9)`);
     wc.save();
     wc.strokeStyle = grd;
     wc.lineWidth   = isActive ? 2 : 1.4;
