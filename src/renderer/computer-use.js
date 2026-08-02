@@ -63,6 +63,28 @@ function describeQuotaError(rawBody) {
   return `Gemini quota exceeded (429)${retry ? ` — retry in ${retry}` : ''}. Check your plan at aistudio.google.com.`;
 }
 
+// Nothing inside the agent loop may await forever. A never-settling promise
+// (stalled fetch, wedged screenshot IPC) parks the whole tool call, which is
+// exactly how the pill ended up stuck on "processing": the debug log showed
+// `tool START do_computer_task` with no matching `tool END`, because run()
+// never returned. The step deadline can't help — it's checked between steps,
+// and a hung await never gets back to that check.
+function withTimeout(promise, ms, label) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(t));
+}
+
+const TIMEOUTS = {
+  screenshot: 15000,
+  request:    45000,
+  action:     20000,
+};
+
 class ComputerUseAgent {
   constructor({ onStep, onLog }) {
     this.onStep = onStep || (() => {});
@@ -70,14 +92,36 @@ class ComputerUseAgent {
     this.aborted = false;
   }
 
+  // Mirrors onLog to the debug file so the agent's internals are visible.
+  // Previously onLog only reached the transcript UI, so a hang inside run()
+  // left no trace in the log at all.
+  _log(msg) {
+    try { window.electronAPI?.debugLog?.(`[cu] ${msg}`); } catch {}
+    this.onLog(msg);
+  }
+
   abort() { this.aborted = true; }
 
   async _post(apiKey, body, attempt = 0) {
-    const res = await fetch(CU_ENDPOINT(apiKey), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    // fetch() never rejects on a stalled connection, so bound it explicitly.
+    const ctl = new AbortController();
+    const abortTimer = setTimeout(() => ctl.abort(), TIMEOUTS.request);
+    let res;
+    try {
+      res = await fetch(CU_ENDPOINT(apiKey), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ctl.signal,
+      });
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        throw new Error(`Gemini request timed out after ${TIMEOUTS.request / 1000}s`);
+      }
+      throw e;
+    } finally {
+      clearTimeout(abortTimer);
+    }
     if (res.ok) return res.json();
 
     const txt = await res.text();
@@ -130,8 +174,12 @@ class ComputerUseAgent {
         return `Stopped after ${Math.round(maxMs / 1000)}s time limit. ${lastSummary || ''}`.trim();
       }
 
-      // Capture clean screenshot (all Aura windows hidden by action mode)
-      const b64 = await window.electronAPI.takeScreenshotClean();
+      this._log(`step ${step + 1}/${maxSteps}: capturing screen`);
+      // Capture clean screenshot (all Aura windows hidden by action mode).
+      // Bounded: this IPC hides windows and drives desktopCapturer, which can
+      // wedge — and an unbounded wait here strands the whole tool call.
+      const b64 = await withTimeout(
+        window.electronAPI.takeScreenshotClean(), TIMEOUTS.screenshot, 'screenshot');
       if (!b64) throw new Error('Screenshot failed');
 
       // Strip earlier screenshots — keep only the latest to control request size
@@ -151,6 +199,7 @@ class ComputerUseAgent {
         generationConfig: { thinkingConfig: { thinkingLevel: 'low' } },
       };
 
+      this._log(`step ${step + 1}: requesting next action`);
       const resp = await this._post(apiKey, body);
       const cand = resp.candidates?.[0];
       const parts = cand?.content?.parts || [];
@@ -184,9 +233,18 @@ class ComputerUseAgent {
       // Push the model's turn back into history — KEEP thoughtSignature
       contents.push({ role: 'model', parts: [fcPart] });
 
-      if (args.intent) this.onLog(`· ${args.intent}`);
+      if (args.intent) this._log(`· ${args.intent}`);
       this.onStep({ action: fc.name, args });
-      const result = await this._executeAction(fc.name, args);
+      let result;
+      try {
+        result = await withTimeout(
+          this._executeAction(fc.name, args), TIMEOUTS.action, `action ${fc.name}`);
+      } catch (e) {
+        // Report the failure to the model instead of aborting — it can adapt.
+        result = `failed: ${e.message}`;
+        this._log(`action ${fc.name} FAILED: ${e.message}`);
+      }
+      this._log(`step ${step + 1} done -> ${result}`);
       lastSummary = `${fc.name}: ${result}`;
 
       contents.push({

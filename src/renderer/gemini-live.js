@@ -515,7 +515,26 @@ class GeminiLive {
     const _t0 = Date.now();
     this._log(`tool START ${name}`, JSON.stringify(args).slice(0, 200));
     try {
-      return await this._dispatchToolInner(call);
+      // Hard ceiling so no tool can strand the session. The individual awaits
+      // inside are bounded too; this is the last line of defence for anything
+      // unforeseen. Computer use legitimately runs longest, hence the split.
+      const cap = name === 'do_computer_task' ? 120000 : 45000;
+      let capTimer;
+      const capped = new Promise((_, reject) => {
+        capTimer = setTimeout(
+          () => reject(new Error(`${name} exceeded ${cap / 1000}s ceiling`)), cap);
+      });
+      try {
+        return await Promise.race([this._dispatchToolInner(call), capped]);
+      } finally {
+        clearTimeout(capTimer);
+      }
+    } catch (err) {
+      this._log(`tool ERROR ${name}: ${err.message}`);
+      // Always answer the model — an unanswered toolCall leaves the turn open
+      // and the UI parked in 'thinking'.
+      try { this._sendToolResponse(id, name, { success: false, output: err.message }); } catch {}
+      try { this.callbacks.onStateChange('listening'); } catch {}
     } finally {
       this._pendingTools.delete(name);
       this._log(`tool END ${name} after ${Date.now() - _t0}ms`);

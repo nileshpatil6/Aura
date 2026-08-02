@@ -436,6 +436,14 @@ if (!gotLock) {
 }
 
 app.whenReady().then(() => {
+  // app.quit() above is asynchronous, so a second instance that LOST the
+  // single-instance lock still reaches this callback. Without this guard it
+  // creates a window, grabs a fallback hotkey (which is why a duplicate launch
+  // logged "Control+Shift+Space" instead of "Alt+Space"), and fights the real
+  // instance over the userData cache — visible as "Unable to move the cache:
+  // Access is denied" and a second pill on screen.
+  if (!gotLock) return;
+
   createWindow();
 
   const shortcuts = ['Alt+Space', 'Control+Shift+Space', 'Control+Space'];
