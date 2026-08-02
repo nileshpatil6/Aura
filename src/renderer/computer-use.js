@@ -88,9 +88,12 @@ class ComputerUseAgent {
       // and try again rather than aborting the whole task. Daily caps don't,
       // so those fail fast.
       const isTransient = /per-minute/i.test(msg);
-      if (isTransient && attempt < 2 && !this.aborted) {
-        const secs = Number((txt.match(/"retryDelay"\s*:\s*"(\d+)s"/) || [])[1]) || 20;
-        this.onLog(`Rate limited — waiting ${secs}s then retrying…`);
+      if (isTransient && attempt < 1 && !this.aborted) {
+        // One retry only, capped — a long silent wait is worse than surfacing
+        // the limit, since the user just sees the agent sitting there.
+        const raw = Number((txt.match(/"retryDelay"\s*:\s*"(\d+)s"/) || [])[1]) || 15;
+        const secs = Math.min(raw, 15);
+        this.onLog(`Rate limited — waiting ${secs}s then retrying once…`);
         await new Promise(r => setTimeout(r, secs * 1000));
         return this._post(apiKey, body, attempt + 1);
       }
@@ -107,9 +110,12 @@ class ComputerUseAgent {
     return [{ computerUse: { environment: 'ENVIRONMENT_DESKTOP' } }];
   }
 
-  async run({ apiKey, goal, maxSteps = 12 }) {
+  // maxMs bounds total wall time. Without it a task that never emits DONE runs
+  // every step to the limit, which reads as the app being frozen.
+  async run({ apiKey, goal, maxSteps = 12, maxMs = 90000 }) {
     this.aborted = false;
     if (!apiKey) throw new Error('No Gemini API key — set one in the dashboard Settings tab.');
+    const deadline = Date.now() + maxMs;
 
     const contents = [{
       role: 'user',
@@ -120,6 +126,9 @@ class ComputerUseAgent {
 
     for (let step = 0; step < maxSteps; step++) {
       if (this.aborted) return 'Cancelled.';
+      if (Date.now() > deadline) {
+        return `Stopped after ${Math.round(maxMs / 1000)}s time limit. ${lastSummary || ''}`.trim();
+      }
 
       // Capture clean screenshot (all Aura windows hidden by action mode)
       const b64 = await window.electronAPI.takeScreenshotClean();

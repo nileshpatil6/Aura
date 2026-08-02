@@ -229,6 +229,26 @@ class GeminiLive {
     this.isPlaying = false;
     this.nextPlayTime = 0;
     this.connected = false;
+    this._replyWatchdog = null;
+  }
+
+  // The UI enters 'thinking' when a toolCall arrives and only leaves it when the
+  // model replies. After a long computer-use run the live turn frequently never
+  // comes back (session moved on / turn dropped), which left the pill stuck on
+  // "processing" forever with the task already finished. Arm a watchdog after
+  // every tool response so the UI always recovers.
+  _armReplyWatchdog(ms = 20000) {
+    this._clearReplyWatchdog();
+    this._replyWatchdog = setTimeout(() => {
+      this._replyWatchdog = null;
+      if (!this.connected) return;
+      this.callbacks.onTranscript?.('\n(no reply from model — ready again)\n');
+      this.callbacks.onStateChange('listening');
+    }, ms);
+  }
+
+  _clearReplyWatchdog() {
+    if (this._replyWatchdog) { clearTimeout(this._replyWatchdog); this._replyWatchdog = null; }
   }
 
   float32ToInt16Base64(float32) {
@@ -407,6 +427,9 @@ class GeminiLive {
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       console.log('[Aura] WS recv:', JSON.stringify(msg).slice(0, 300));
+
+      // Any message means the model is responsive again.
+      this._clearReplyWatchdog();
 
       if (msg.error) {
         this.callbacks.onError(`Gemini error: ${msg.error.message || JSON.stringify(msg.error)}`);
@@ -587,7 +610,12 @@ class GeminiLive {
   }
 
   _sendToolResponse(id, name, result) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      // Socket died while the tool was running — don't strand the UI in 'thinking'.
+      this.callbacks.onStateChange('idle');
+      return;
+    }
+    this._armReplyWatchdog();
     this.ws.send(JSON.stringify({
       toolResponse: {
         functionResponses: [{
@@ -649,6 +677,7 @@ class GeminiLive {
   unmute() { this._muted = false; }
 
   disconnect() {
+    this._clearReplyWatchdog();
     this.stopRecording();
     if (this.ws) { this.ws.close(); this.ws = null; }
     this.audioQueue = [];
