@@ -2,47 +2,109 @@
 
 # Aura
 
-### Your Windows desktop, voice-controlled by Gemini — and it actually touches the screen.
+### The real-world Jarvis for your PC.
 
-Not a chatbot in a window. A floating orb that listens, thinks, and then **moves your mouse, types your keys, and gets the task done** — while you watch it happen.
+**An AI that *uses* your computer — not one that talks about using your computer.**
+
+Say it out loud. Aura sees your screen, plans the steps, then **moves the mouse, types the keys, and finishes the job** — shopping carts, code, research, file wrangling, whatever you were about to do yourself.
 
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D4)
 ![Electron](https://img.shields.io/badge/Electron-33-47848F)
 ![Model](https://img.shields.io/badge/model-Gemini%203-8E44AD)
 ![License](https://img.shields.io/badge/license-Proprietary-lightgrey)
 
-**[Get started](#getting-started)** · **[See what it does](#what-it-actually-does)** · **[How it works](#architecture)**
+**[What it can do](#what-you-can-actually-ask-it) · [Get started](#getting-started) · [How it works](#architecture)**
 
 </div>
 
 ---
 
 <!--
-  DEMO_GIF_HERE — replace this block with a real screen recording before
-  making the repo public. This is the single highest-leverage thing in this
-  file: a 10-15s loop of the orb hearing a command and visibly clicking
-  through a task. Record with ScreenToGif or OBS -> gifski, keep it under
-  ~8MB, drop it in assets/demo.gif, then:
-    ![Aura demo](assets/demo.gif)
-  right here, above everything else.
+  DEMO_GIF_HERE — replace this comment with a real screen recording before
+  going public. Highest-leverage thing in this file: a 10-15s silent loop of
+  the orb hearing a command and visibly clicking through a task.
+  Record with ScreenToGif or OBS -> gifski, keep under ~8MB, save to
+  assets/demo.gif, then put:  ![Aura demo](assets/demo.gif)  right here.
 -->
 
-## What it actually does
+## The difference
 
-You say: *"Open Notepad and write a haiku about deadlines."*
+| Ordinary voice assistant | Aura |
+|---|---|
+| "Here's how to order coffee filters on Amazon…" | *Opens Chrome, searches, picks the item, fills the cart, stops at payment for your OK* |
+| "I can't see your screen." | *Looks at your screen mid-sentence and answers about what's on it* |
+| "Here's a code snippet, copy it." | *Reads the error on your screen, clicks into your editor, types the fix* |
+| Forgets everything you did | *Remembers what was on your screen last Tuesday and finds it* |
+| Answers one question, then stops | *Plans 3–8 steps and executes them one after another, showing live progress* |
 
-Aura doesn't reply with text describing what it would do. It:
+## What you can actually ask it
 
-1. Hears you — real-time, full-duplex voice over the Gemini Live API, no push-to-talk
-2. Decides Notepad needs to open, and opens it
-3. **Watches the screen, moves the cursor into the text field, and types the haiku itself**
-4. Talks back, mid-task, while it's still working
+Every example below maps to a real, working code path in this repo — not a roadmap.
 
-That's the whole pitch. Most "AI assistants" stop at step 1. Aura is built around steps 2–4.
+### Get things done on the web
 
-## Why this exists
+```
+"Order coffee filters on Amazon"
+"Book a table for two on Friday"
+"Apply to five frontend jobs on LinkedIn"
+"Fill out this form with my details"
+```
 
-Every voice assistant on the market can tell you the weather. None of them can actually *do* something on your machine — open the right app, click the right button, fill the right field — without you doing the clicking yourself. Aura closes that gap: it's a real computer-use agent wearing a voice interface, not a chat window with a microphone bolted on.
+The **Agent Console** breaks the goal into concrete steps, then executes each one by actually clicking and typing. You watch the plan tick over live, step by step, with screenshots. It stops and asks before anything irreversible — payments, sending messages, accepting terms.
+
+### Ride shotgun while you code
+
+```
+"What's this error on my screen?"
+"Open my project in VS Code"
+"Run the test suite and tell me what broke"
+"Copy this stack trace and search it"
+```
+
+It captures your actual screen, reads it, and can drive your editor or terminal directly. PowerShell execution means it can run builds, inspect processes, or manage files — and report back what happened, out loud.
+
+### Ask about anything you can see
+
+```
+Ctrl+Shift+S   → drag a box around anything → "what does this mean?"
+Ctrl+Shift+E   → select text anywhere → instant explanation
+Ctrl+Shift+A   → Spotlight-style prompt over any app
+```
+
+Foreign text, a cryptic error dialog, a dense chart, a legal clause. Drag, ask, done — without leaving what you were doing.
+
+### Remember things you'd forget
+
+```
+"Find that PDF about the budget I was reading last week"
+"What was that library I had open on Tuesday?"
+```
+
+**Recall** quietly snapshots your screen in the background, has Gemini describe and index each frame, and makes weeks of your own screen history searchable in plain language. Opt-in, off by default, stored entirely on your machine.
+
+### Run your machine by voice
+
+```
+"Set volume to 30 and open Spotify"
+"What's eating my CPU?"
+"Minimize everything and lock the screen"
+"Make a folder called Invoices on my desktop"
+"Save this as a macro called morning setup"
+```
+
+Apps, volume, brightness, windows, clipboard, power, battery, disk, WiFi — plus **macros**: teach it a multi-step routine once, then trigger it by name forever.
+
+## Why it's different under the hood
+
+**It genuinely sees and acts.** Aura uses Gemini 3's built-in `computer_use` tool in desktop mode — a real vision→action loop, screenshot in, mouse coordinates out. Not a scripted macro recorder, not a wrapper around keyboard shortcuts.
+
+**Voice is truly live.** Full-duplex WebSocket streaming over the Gemini Live API. Interrupt it mid-sentence. It talks back *while* it's working. No push-to-talk, no record-then-transcribe lag.
+
+**Clicks land where they're aimed.** Coordinates are computed in true logical display space, verified to 0px error on scaled (125%/150%) displays — the thing most computer-use demos quietly get wrong.
+
+**It can't hang.** Every model request, screenshot, and executed action is individually bounded with real timeouts. A stalled network call can't wedge the agent, and every failure is reported back to the model so it can adapt instead of dying.
+
+**It stops before it hurts you.** Gemini's safety layer flags financial transactions, message sending, and legal agreements — Aura halts and hands control back to you rather than auto-confirming. This is deliberate: it will fill your cart, but it won't spend your money.
 
 ## Getting started
 
@@ -53,90 +115,29 @@ npm install
 npm start
 ```
 
-Grab a free Gemini API key at [aistudio.google.com](https://aistudio.google.com), paste it into the Command Center's Settings tab on first launch, and talk to it.
+Grab a free Gemini API key at [aistudio.google.com](https://aistudio.google.com), paste it into the Command Center's **Settings** tab on first launch, and start talking.
 
-Prefer not to build from source? Grab a prebuilt release: **Installer** (`Aura Setup.exe`) or **Portable** (`Aura.exe`, no install).
+Prefer a binary? Build one with `npm run build` — you get an installer and a portable `.exe`.
 
-> Your API key lives only in local storage on your machine. It is never bundled with this repo, never transmitted anywhere but Google's API, and never shared between installs. Use your own.
+> Your API key is stored only in local `electron-store` data on your machine. It never enters this repo, never goes anywhere but Google's API, and isn't shared between installs.
 
-## See it work
+## The interface
 
-```
-you   › "Find that PDF I was reading about the budget last week and open it"
-aura  › [searches Recall, locates the file, opens it]
-        "Found it — Q3_Budget_Draft.pdf, opened."
+**The pill.** A transparent, always-on-top orb docked at the top of your screen. Click to talk. It shows a live waveform driven by your actual microphone input, mutes instantly mid-conversation on click, and slips away to a thin glowing edge after 20s idle — reappearing when your cursor comes near.
 
-you   › "Apply to five frontend jobs on LinkedIn for me"
-aura  › [Agent Console takes over — plans steps, clicks through applications,
-         reports progress live]
-        "Applied to 5. Two needed a cover letter — I flagged those for you."
-
-you   › [click the orb, mid-sentence] "actually stop — mute for a sec"
-aura  › [mutes instantly, mid-conversation, no delay]
-```
-
-Every line above is a real, working code path — not a mockup. `Recall` is background OCR search, `Agent Console` is the autonomous multi-step runner, the mute is instant because voice state and mute state are decoupled at the protocol level.
-
-## Feature overview
-
-### Overlay & voice
-
-| Capability | Description |
-|---|---|
-| Floating pill | Transparent, click-through, always-on-top orb docked at the top-center of the screen |
-| Live voice | Real-time, full-duplex conversation via the Gemini Live API — no push-to-talk |
-| In-place mute | Click the active orb to mute/unmute mid-conversation, instantly |
-| Live waveform | Rendered from real microphone input via Web Audio — not a canned animation |
-| Mini-panel | Expands from the pill for transcript view and a text-input fallback |
-| Auto-hide | Recedes to a thin glowing edge after 20s idle; reappears on hover |
-| Dashboard sync | Voice state shared live between the pill and the Command Center |
-
-### Command Center
-
-A dedicated multi-tab window reachable from the tray or the pill:
+**The Command Center.** A full console behind it:
 
 | Tab | Purpose |
 |---|---|
-| Voice | Full-screen voice arena — an audio-reactive orb driven by real FFT data, plus a live oscilloscope |
-| Conversation | Complete chat history with Aura |
+| Voice | Full-screen voice arena — audio-reactive orb on real FFT data, live oscilloscope |
+| Conversation | Complete chat history |
 | Activity Log | Timeline of every command, click, and tool invocation |
-| System Monitor | Live CPU and memory statistics |
-| Macros | Save a named goal once, replay it by name — by voice or text |
-| Memory | Persistent name and notes, automatically woven into every conversation |
-| Recall | Background screen capture with OCR, searchable in natural language |
-| Agent Console | Long-running autonomous tasks with live, step-by-step progress |
-| Settings | API key, voice selection, preferences |
-
-### The part that makes this different: real computer use
-
-- **Vision-driven UI control** — hand it any on-screen goal ("click submit," "scroll to the third result") and a dedicated agent plans and executes the clicks
-- **Verified DPI-correct targeting** — coordinates are computed in true logical display space, so clicks land where they're aimed on scaled displays, not offset
-- **Instant hotkeys** — chorded shortcuts fire without a vision pass at all (`ctrl+c`, `alt+tab`, `win+d`)
-- **Bounded execution** — every action and every model request has a real timeout; nothing can silently hang the agent
-- **Tool chaining** — opens an app, then hands the UI work to the computer-use agent in the same turn
-
-### System & application automation
-
-| Capability | Description |
-|---|---|
-| Application launcher | Opens any installed application by name |
-| Shell execution | Arbitrary PowerShell for anything not covered by a dedicated tool |
-| Web search | Opens a Google search or a specific URL directly |
-| Media control | Play/pause, next/previous, mute |
-| Volume & brightness | Set to an exact percentage |
-| Window management | Focus, minimize all, or close an application by name |
-| Power actions | Lock the screen or suspend the PC |
-| Clipboard | Read, write, and a running history (`Ctrl+Shift+V`) |
-| System info | Battery, memory, disk, processes, WiFi, IP, date/time |
-| Notifications | Native Windows toast notifications on request |
-
-### Contextual tools
-
-| Shortcut | Behavior |
-|---|---|
-| `Ctrl+Shift+A` | Spotlight-style prompt over any application |
-| `Ctrl+Shift+S` | Drag a screen region and ask about its contents |
-| `Ctrl+Shift+E` | Ask about the current text selection directly |
+| System Monitor | Live CPU and memory |
+| Macros | Save a goal once, replay it by name forever |
+| Memory | Your name and notes, woven into every conversation automatically |
+| Recall | Searchable background screen history |
+| Agent Console | Autonomous multi-step tasks with live progress |
+| Settings | API key, voice, preferences |
 
 ## Keyboard shortcuts
 
@@ -148,72 +149,71 @@ A dedicated multi-tab window reachable from the tray or the pill:
 | Region screenshot → ask | `Ctrl+Shift+S` |
 | Ask about selected text | `Ctrl+Shift+E` |
 | Clipboard history | `Ctrl+Shift+V` |
-| Open Command Center | Tray menu, or the pill's dashboard button |
-| Mute / unmute mic | Click the pill while a voice session is active |
+| Mute / unmute mic | Click the pill during a voice session |
 | Expand / collapse panel | Chevron on the pill |
 
 ## Architecture
 
 ```
 src/
-├── main.js                    Electron main process — windows, IPC, global shortcuts, tray
+├── main.js                    Electron main — windows, IPC, global shortcuts, tray
 ├── preload.js                 contextBridge — the only IPC surface exposed to renderers
-├── automation.js               PowerShell / Win32 automation layer
-├── store.js                    electron-store wrapper — settings, memory, macros, history
-├── vision-memory.js            Background capture + OCR pipeline for Recall
+├── automation.js               PowerShell / Win32 layer (persistent warm session)
+├── store.js                    electron-store — settings, memory, macros, history
+├── vision-memory.js            Background capture + indexing for Recall
 └── renderer/
-    ├── index.html / app.js / style.css        The pill overlay and mini-panel
-    ├── dashboard.html / dashboard.js / .css    Command Center (all tabs)
-    ├── gemini-live.js          Gemini Live API client — WebSocket, audio I/O, tool dispatch
+    ├── index.html / app.js / style.css        Pill overlay and mini-panel
+    ├── dashboard.html / dashboard.js / .css    Command Center
+    ├── gemini-live.js          Live API client — WebSocket, audio I/O, tool dispatch
     ├── computer-use.js         Vision-driven click/type agent
     ├── agent.html              Autonomous Agent Console
-    ├── ask.html                Spotlight-style prompt window
-    ├── clips.html              Clipboard history viewer
+    ├── ask.html                Spotlight-style prompt
+    ├── clips.html              Clipboard history
     └── region.html             Screen region selector
 ```
 
-**Window model.** The pill is a single frameless, transparent, always-on-top `BrowserWindow` that resizes between collapsed orb, wide voice pill, and expanded panel — measuring its own real content size and reporting it to the main process, never guessing pixel constants. The Command Center, Agent Console, Ask, and Clips surfaces are independent frameless windows created on demand.
+**Window model.** The pill is one frameless, transparent, always-on-top `BrowserWindow` that measures its own rendered content and reports the real size to the main process — no hardcoded pixel constants. Command Center, Agent Console, Ask, and Clips are independent windows created on demand.
 
-**Voice pipeline.** `gemini-live.js` opens a WebSocket to the Gemini Live API (`gemini-3.1-flash-live-preview`), streaming 16 kHz PCM microphone audio out and 24 kHz PCM in. Tool calls returned over that same connection are dispatched through the identical IPC bridge every other automation path uses — voice and text share one execution surface, not two parallel implementations.
+**Voice pipeline.** `gemini-live.js` streams 16 kHz PCM out and 24 kHz PCM in over a WebSocket to `gemini-3.1-flash-live-preview`, exposing 15 tools. Tool calls dispatch through the same IPC bridge every other automation path uses — voice and text share one execution surface, not two implementations.
 
-**Computer-use pipeline.** `computer-use.js` runs a screenshot → model → action loop against Gemini's built-in `computer_use` tool in `ENVIRONMENT_DESKTOP` mode. Every request, screenshot capture, and executed action is individually timed and bounded — a stalled network call or a wedged screenshot can't silently hang the agent, and every failure reports back to the model so it can adapt instead of dying.
+**Computer-use pipeline.** `computer-use.js` runs a screenshot → model → action loop against Gemini's `computer_use` tool in `ENVIRONMENT_DESKTOP`. Screenshots are captured at the display's true aspect ratio and sized for latency; coordinates are denormalized into logical display space; every await is individually bounded.
 
 ## Technology stack
 
 | Layer | Technology |
 |---|---|
-| Application shell | Electron 33 — frameless, transparent, always-on-top windows |
+| Shell | Electron 33 — frameless, transparent, always-on-top |
 | Reasoning | Gemini 3 Flash (`gemini-3.6-flash`) with built-in computer use |
-| Voice | Gemini Live API (`gemini-3.1-flash-live-preview`), full-duplex over WebSocket |
-| Persistence | `electron-store` — settings, memory, macros, history, activity log |
-| Audio analysis | Web Audio API (`AudioContext`, `AnalyserNode`) — real mic-driven visualization |
-| Rendering | Canvas 2D — audio-reactive orb and oscilloscope waveform |
-| System control | PowerShell + Win32 (P/Invoke via a persistent, warm session) |
-| Screen capture | `desktopCapturer` |
+| Voice | Gemini Live API (`gemini-3.1-flash-live-preview`), full-duplex WebSocket |
+| Persistence | `electron-store` |
+| Audio | Web Audio API — real mic-driven FFT visualization |
+| Rendering | Canvas 2D — audio-reactive orb and oscilloscope |
+| System control | PowerShell + Win32 P/Invoke via a persistent warm session |
+| Capture | `desktopCapturer` |
 
-## Building for distribution
+## Building
 
 ```bash
 npm run build            # NSIS installer + portable .exe
-npm run build-portable   # portable .exe only
-npm run pack              # unpacked directory, for local testing
+npm run build-portable   # portable only
+npm run pack             # unpacked dir, for local testing
 ```
-
-Artifacts land in `dist/`.
 
 ## Security & privacy
 
-- Your Gemini API key lives in local `electron-store` storage only — never written into source control, never bundled, never shared across installs.
-- Recall (background screen capture) is opt-in and off by default; toggle it any time from the Command Center.
-- `contextIsolation` and disabled `nodeIntegration` are enforced on every window; renderer processes never touch Node directly.
-- **This software can move your mouse, type on your behalf, and execute shell commands based on a language model's output.** Supervise it, especially on anything consequential. It's a real agent, not a toy — treat it with the caution that implies.
+- Your API key lives in local storage only — never in this repo, never shared between installs.
+- Recall is **opt-in and off by default**. Snapshots stay on your machine.
+- `contextIsolation` on and `nodeIntegration` off for every window; renderers never touch Node directly.
+- **This software moves your mouse, types on your behalf, and runs shell commands based on model output.** The safety gate blocks payments and message-sending, but supervise it on anything that matters. It's a real agent, not a toy.
 
 ---
 
 <div align="center">
 
-**Requirements:** Windows 10/11 x64 · internet connection · a free Gemini API key
+### Built to be the Jarvis we were promised — one that actually presses the buttons.
 
-If this is useful to you, a ⭐ helps more people find it.
+**Windows 10/11 x64 · internet connection · a free Gemini API key**
+
+If this is useful to you, a ⭐ helps other people find it.
 
 </div>
