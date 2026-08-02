@@ -1,5 +1,6 @@
-const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer, clipboard } = require('electron');
+const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer, clipboard, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const automation = require('./automation');
 const store = require('./store');
 const visionMemory = require('./vision-memory');
@@ -634,6 +635,23 @@ ipcMain.handle('minimize-all',    () => automation.minimizeAll());
 ipcMain.handle('close-app',       (_e, n) => automation.closeApp(n));
 ipcMain.handle('lock-screen',     () => automation.lockScreen());
 ipcMain.handle('sleep-pc',        () => automation.sleepPc());
+
+// ── Debug log ────────────────────────────────────────────────────────────────
+// Renderer processes have no console the user can see (DevTools is opt-in), so
+// diagnostics go to a file: %APPDATA%/aura/aura-debug.log. Truncated on launch
+// so each session starts clean.
+const DEBUG_LOG = path.join(app.getPath('userData'), 'aura-debug.log');
+try { fs.writeFileSync(DEBUG_LOG, `=== Aura session ${new Date().toISOString()} ===\n`); } catch {}
+
+function debugLog(line) {
+  const stamp = new Date().toISOString().slice(11, 23);
+  const text = `[${stamp}] ${line}\n`;
+  try { fs.appendFileSync(DEBUG_LOG, text); } catch {}
+  process.stdout.write(text);
+}
+ipcMain.on('debug-log', (_e, line) => debugLog(line));
+ipcMain.handle('get-log-path', () => DEBUG_LOG);
+ipcMain.on('open-log', () => { try { shell.showItemInFolder(DEBUG_LOG); } catch {} });
 
 // Store IPC
 ipcMain.handle('store-get',    (_e, bucket, key)        => store.get(bucket, key));

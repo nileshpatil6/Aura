@@ -229,26 +229,14 @@ class GeminiLive {
     this.isPlaying = false;
     this.nextPlayTime = 0;
     this.connected = false;
-    this._replyWatchdog = null;
+    this._pendingTools = new Set();
   }
 
-  // The UI enters 'thinking' when a toolCall arrives and only leaves it when the
-  // model replies. After a long computer-use run the live turn frequently never
-  // comes back (session moved on / turn dropped), which left the pill stuck on
-  // "processing" forever with the task already finished. Arm a watchdog after
-  // every tool response so the UI always recovers.
-  _armReplyWatchdog(ms = 20000) {
-    this._clearReplyWatchdog();
-    this._replyWatchdog = setTimeout(() => {
-      this._replyWatchdog = null;
-      if (!this.connected) return;
-      this.callbacks.onTranscript?.('\n(no reply from model — ready again)\n');
-      this.callbacks.onStateChange('listening');
-    }, ms);
-  }
-
-  _clearReplyWatchdog() {
-    if (this._replyWatchdog) { clearTimeout(this._replyWatchdog); this._replyWatchdog = null; }
+  // Diagnostics -> %APPDATA%/aura/aura-debug.log
+  _log(...args) {
+    const line = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+    try { window.electronAPI?.debugLog?.(`[live] ${line}`); } catch {}
+    console.log('[live]', ...args);
   }
 
   float32ToInt16Base64(float32) {
@@ -426,10 +414,18 @@ class GeminiLive {
 
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
-      console.log('[Aura] WS recv:', JSON.stringify(msg).slice(0, 300));
-
-      // Any message means the model is responsive again.
-      this._clearReplyWatchdog();
+      // Log the SHAPE of every message — this is what reveals whether the model
+      // ever replies after a tool response, and whether turnComplete arrives.
+      const sc0 = msg.serverContent;
+      this._log('recv', JSON.stringify({
+        keys: Object.keys(msg),
+        turnComplete: sc0?.turnComplete,
+        interrupted: sc0?.interrupted,
+        hasModelTurn: !!sc0?.modelTurn,
+        partKinds: (sc0?.modelTurn?.parts || []).map(p => (p.inlineData ? 'audio' : p.text ? 'text' : 'other')),
+        toolCalls: (msg.toolCall?.functionCalls || []).map(c => c.name),
+        pendingTools: [...this._pendingTools],
+      }));
 
       if (msg.error) {
         this.callbacks.onError(`Gemini error: ${msg.error.message || JSON.stringify(msg.error)}`);
@@ -463,16 +459,26 @@ class GeminiLive {
             if (part.text) this.callbacks.onTranscript(part.text);
           }
         }
-        if (sc.turnComplete && this.audioQueue.length === 0 && !this.isPlaying) {
-          this.callbacks.onStateChange('listening');
+        if (sc.turnComplete) {
+          // Only defer to _playNext() when audio is genuinely still queued —
+          // otherwise the state must be released here.
+          if (this.audioQueue.length === 0 && !this.isPlaying) {
+            this.callbacks.onStateChange('listening');
+          } else {
+            this._log('turnComplete while audio still playing — _playNext will release state',
+              { queued: this.audioQueue.length, isPlaying: this.isPlaying });
+          }
         }
       }
 
       if (msg.toolCall) {
-        this.callbacks.onStateChange('thinking');
         const calls = msg.toolCall.functionCalls || [];
-        // run all tool calls in parallel
+        this._log('toolCall received', calls.map(c => c.name));
+        this.callbacks.onStateChange('thinking');
+        const t0 = Date.now();
         await Promise.all(calls.map(call => this._dispatchTool(call)));
+        this._log(`all tool calls finished in ${Date.now() - t0}ms; awaiting model reply`,
+          { pendingTools: [...this._pendingTools] });
       }
     };
 
@@ -505,7 +511,19 @@ class GeminiLive {
 
   async _dispatchTool(call) {
     const { id, name, args = {} } = call;
-    console.log('Tool call:', name, args);
+    this._pendingTools.add(name);
+    const _t0 = Date.now();
+    this._log(`tool START ${name}`, JSON.stringify(args).slice(0, 200));
+    try {
+      return await this._dispatchToolInner(call);
+    } finally {
+      this._pendingTools.delete(name);
+      this._log(`tool END ${name} after ${Date.now() - _t0}ms`);
+    }
+  }
+
+  async _dispatchToolInner(call) {
+    const { id, name, args = {} } = call;
     // Log activity
     try {
       const kind = (name === 'do_computer_task' || name === 'press_key') ? 'click'
@@ -612,10 +630,11 @@ class GeminiLive {
   _sendToolResponse(id, name, result) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       // Socket died while the tool was running — don't strand the UI in 'thinking'.
+      this._log(`toolResponse SKIPPED for ${name} — socket not open (readyState=${this.ws?.readyState})`);
       this.callbacks.onStateChange('idle');
       return;
     }
-    this._armReplyWatchdog();
+    this._log(`toolResponse sent for ${name}`, JSON.stringify(result).slice(0, 160));
     this.ws.send(JSON.stringify({
       toolResponse: {
         functionResponses: [{
@@ -677,7 +696,7 @@ class GeminiLive {
   unmute() { this._muted = false; }
 
   disconnect() {
-    this._clearReplyWatchdog();
+    this._log('disconnect()');
     this.stopRecording();
     if (this.ws) { this.ws.close(); this.ws = null; }
     this.audioQueue = [];

@@ -87,9 +87,68 @@ const STATUS_LABELS = {
   speaking:   'SPEAKING',
 };
 
+// ──── Debug logging ───────────────────────────────────────────────────────────
+// Goes to %APPDATA%/aura/aura-debug.log so failures are diagnosable without
+// DevTools open.
+function dlog(...args) {
+  const line = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+  try { window.electronAPI?.debugLog?.(`[pill] ${line}`); } catch {}
+  console.log('[pill]', ...args);
+}
+
+// ──── Stuck-state watchdog ────────────────────────────────────────────────────
+// Owned here, in the layer that owns UI state, rather than in the WS client.
+// The previous attempt lived in gemini-live.js and cleared itself on ANY
+// incoming message — but the Live API streams unrelated messages constantly, so
+// it got cancelled while the UI stayed in 'thinking' and hung anyway.
+// This one keys purely off "how long have we been in a busy state", so nothing
+// can silently cancel it.
+// Polled rather than a single timer, so the deadline can adapt: a tool that is
+// genuinely still running (computer use can take ~90s) gets a long leash, while
+// a 'thinking' state with no tool running is idle-hanging and recovers quickly.
+const STUCK_LIMIT_MS  = { connecting: 20000, thinking: 25000, speaking: 90000 };
+const TOOL_BUSY_LIMIT = 150000; // ceiling while a tool is actually executing
+let stuckTimer = null;
+let stateEnteredAt = Date.now();
+
+function toolIsRunning() {
+  return !!(gemini && gemini._pendingTools && gemini._pendingTools.size > 0);
+}
+
+function armStuckWatchdog(state) {
+  clearInterval(stuckTimer);
+  stuckTimer = null;
+  const limit = STUCK_LIMIT_MS[state];
+  if (!limit) return;
+
+  stuckTimer = setInterval(() => {
+    if (currentState !== state) { clearInterval(stuckTimer); stuckTimer = null; return; }
+    const heldMs = Date.now() - stateEnteredAt;
+    const busy = toolIsRunning();
+    const deadline = busy ? TOOL_BUSY_LIMIT : limit;
+    if (heldMs < deadline) return;
+
+    clearInterval(stuckTimer);
+    stuckTimer = null;
+    dlog(`WATCHDOG: stuck in "${state}" for ${(heldMs / 1000).toFixed(1)}s (toolRunning=${busy}) — recovering`, {
+      voiceActive,
+      connected: !!(gemini && gemini.connected),
+      pendingTools: gemini && gemini._pendingTools ? [...gemini._pendingTools] : [],
+    });
+    if (gemini && gemini.connected) setState('listening');
+    else { dlog('WATCHDOG: session dead — closing down'); closeAll(); }
+  }, 1000);
+}
+
 // ──── Set state ────────────────────────────────────────────────────────────────
 function setState(state) {
-  if (currentState === state) return;
+  if (currentState === state) {
+    dlog(`setState("${state}") ignored (already in that state)`);
+    return;
+  }
+  dlog(`state ${currentState} -> ${state} (held ${((Date.now() - stateEnteredAt) / 1000).toFixed(1)}s)`);
+  stateEnteredAt = Date.now();
+  armStuckWatchdog(state);
   currentState = state;
   orbWrap.className = `orb-wrap ${state}${isMuted ? ' muted' : ''}`;
   panel.dataset.state = state;
@@ -378,5 +437,12 @@ document.addEventListener('mousemove', (e) => {
 });
 
 // ──── Init ────────────────────────────────────────────────────────────────────
-syncPillSize(); // setState('idle') below is a no-op (already the initial state) so size it directly
+dlog('renderer boot — logging active');
+syncPillSize(); // setState('idle') is a no-op (already the initial state) so size it directly
 scheduleAutoHide();
+
+// Surface unexpected failures in the log rather than letting them vanish into a
+// closed DevTools console — a silent throw mid-turn is exactly how the UI ends
+// up parked in a busy state.
+window.addEventListener('error', (e) => dlog('UNCAUGHT ERROR:', e.message, e.filename + ':' + e.lineno));
+window.addEventListener('unhandledrejection', (e) => dlog('UNHANDLED REJECTION:', String(e.reason && e.reason.message || e.reason)));
