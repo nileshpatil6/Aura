@@ -93,6 +93,9 @@ function createDashboard() {
     show: true,
     backgroundColor: '#050811',
     title: 'Aura · Command Center',
+    // Only matters for `npm start` — the packaged .exe already carries
+    // assets/icon.ico as its resource icon via build.win.icon.
+    icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
