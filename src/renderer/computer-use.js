@@ -40,6 +40,29 @@ WORKFLOW:
 - If you cannot progress (target not visible, system stuck), reply with plain text starting with DONE: <reason>.
 - When the goal is fully accomplished, reply with plain text starting with DONE: <one-sentence summary>.`;
 
+// A 429 otherwise surfaces as the agent simply not moving the mouse, which is
+// indistinguishable from broken input. Per-minute limits clear on their own;
+// the per-day free-tier cap does not, so say which one was hit.
+function describeQuotaError(rawBody) {
+  let quotaId = '', retry = '';
+  try {
+    const err = JSON.parse(rawBody).error || {};
+    for (const d of err.details || []) {
+      if (d.retryDelay) retry = d.retryDelay;
+      for (const v of d.violations || []) quotaId = v.quotaId || quotaId;
+    }
+  } catch {}
+
+  if (/PerDay/i.test(quotaId)) {
+    return 'Gemini daily free-tier quota exhausted (429). This resets once every 24h — ' +
+           'enable billing at aistudio.google.com to continue today.';
+  }
+  if (/PerMinute/i.test(quotaId)) {
+    return `Gemini per-minute rate limit hit (429). Retrying is fine${retry ? ` — try again in ${retry}` : ''}.`;
+  }
+  return `Gemini quota exceeded (429)${retry ? ` — retry in ${retry}` : ''}. Check your plan at aistudio.google.com.`;
+}
+
 class ComputerUseAgent {
   constructor({ onStep, onLog }) {
     this.onStep = onStep || (() => {});
@@ -49,22 +72,32 @@ class ComputerUseAgent {
 
   abort() { this.aborted = true; }
 
-  async _post(apiKey, body) {
+  async _post(apiKey, body, attempt = 0) {
     const res = await fetch(CU_ENDPOINT(apiKey), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const txt = await res.text();
-      // 429 is common on the free tier and otherwise just looks like the agent
-      // hanging, so name it explicitly instead of dumping a raw quota blob.
-      if (res.status === 429) {
-        throw new Error('Gemini rate limit hit (429) — free-tier quota exhausted. Wait a minute or enable billing.');
+    if (res.ok) return res.json();
+
+    const txt = await res.text();
+
+    if (res.status === 429) {
+      const msg = describeQuotaError(txt);
+      // Per-minute caps clear by themselves — wait out the server's retryDelay
+      // and try again rather than aborting the whole task. Daily caps don't,
+      // so those fail fast.
+      const isTransient = /per-minute/i.test(msg);
+      if (isTransient && attempt < 2 && !this.aborted) {
+        const secs = Number((txt.match(/"retryDelay"\s*:\s*"(\d+)s"/) || [])[1]) || 20;
+        this.onLog(`Rate limited — waiting ${secs}s then retrying…`);
+        await new Promise(r => setTimeout(r, secs * 1000));
+        return this._post(apiKey, body, attempt + 1);
       }
-      throw new Error(`Computer Use API ${res.status}: ${txt.slice(0, 300)}`);
+      throw new Error(msg);
     }
-    return res.json();
+
+    throw new Error(`Computer Use API ${res.status}: ${txt.slice(0, 300)}`);
   }
 
   // Desktop environment: OS-level cursor/keyboard actions, and it natively
