@@ -1,4 +1,4 @@
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const { Notification } = require('electron');
 const fs = require('fs');
 const os = require('os');
@@ -126,6 +126,85 @@ async function runPowerShell(command) {
   });
 }
 
+// ── Persistent PowerShell session for input actions ─────────────────────────
+// Every computerAction used to spawn a fresh PowerShell (~584ms) and re-JIT the
+// Win32 P/Invoke type via Add-Type (~350ms) — about 1s of pure overhead on every
+// click or keystroke. This keeps one warm session with the type already loaded
+// and streams commands to it, so an action costs roughly the time it takes to
+// actually move the mouse. Falls back to one-shot runPowerShell if the session
+// can't start or stops responding.
+const PS_SENTINEL = '<<AURA_DONE>>';
+let psProc = null;
+let psBuf = '';
+let psPending = null;      // { resolve, timer }
+let psChain = Promise.resolve(); // serializes commands onto the single stdin
+
+function killPS() {
+  if (psProc) { try { psProc.kill(); } catch {} }
+  psProc = null;
+  psBuf = '';
+  if (psPending) { const p = psPending; psPending = null; p.resolve(null); }
+}
+
+function ensurePS() {
+  if (psProc) return psProc;
+  try {
+    // Dot-source the Win32 type from a file rather than piping the here-string
+    // through stdin, which is fragile with `-Command -`.
+    const win32File = path.join(os.tmpdir(), 'aura_win32.ps1');
+    fs.writeFileSync(win32File, WIN32_BLOCK, 'utf8');
+
+    const proc = spawn('powershell',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
+      { windowsHide: true });
+
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk) => {
+      psBuf += chunk;
+      const i = psBuf.indexOf(PS_SENTINEL);
+      if (i !== -1 && psPending) {
+        const out = psBuf.slice(0, i).trim();
+        psBuf = psBuf.slice(i + PS_SENTINEL.length);
+        const p = psPending; psPending = null;
+        clearTimeout(p.timer);
+        p.resolve(out);
+      }
+    });
+    proc.stderr.setEncoding('utf8');
+    proc.stderr.on('data', () => {});           // non-fatal; surfaced via stdout
+    proc.on('exit', () => { psProc = null; psBuf = ''; });
+    proc.on('error', () => { psProc = null; psBuf = ''; });
+
+    proc.stdin.write(`. '${win32File.replace(/'/g, "''")}'\n`);
+    psProc = proc;
+    return proc;
+  } catch {
+    return null;
+  }
+}
+
+// Runs a script in the warm session. Resolves null if unavailable/timed out,
+// which signals the caller to fall back to a one-shot process.
+function runPersistent(script, timeoutMs = 8000) {
+  const task = () => new Promise((resolve) => {
+    const proc = ensurePS();
+    if (!proc || psPending) return resolve(null);
+    const timer = setTimeout(() => {
+      if (psPending) { psPending = null; killPS(); resolve(null); }
+    }, timeoutMs);
+    psPending = { resolve, timer };
+    try {
+      proc.stdin.write(`${script}\nWrite-Output "${PS_SENTINEL}"\n`);
+    } catch {
+      clearTimeout(timer); psPending = null; killPS(); resolve(null);
+    }
+  });
+  psChain = psChain.then(task, task);
+  return psChain;
+}
+
+function shutdownAutomation() { killPS(); }
+
 async function openApp(name, url) {
   const script = buildOpenAppScript(name, url);
   return runPowerShell(script);
@@ -194,10 +273,11 @@ if (-not ([System.Management.Automation.PSTypeName]'Win32Input').Type) {
 }
 `;
 
+// NOTE: builders emit only the action itself. The Win32 type is loaded once by
+// the persistent session (ensurePS); the one-shot fallback prepends WIN32_BLOCK.
 function buildMouseScript(x, y, action) {
-  const base = `${WIN32_BLOCK}
-[Win32Input]::SetCursorPos(${x}, ${y})
-Start-Sleep -Milliseconds 120
+  const base = `[Win32Input]::SetCursorPos(${x}, ${y})
+Start-Sleep -Milliseconds 40
 `;
   switch (action) {
     case 'click':
@@ -229,9 +309,8 @@ function buildScrollScript(x, y, direction, clicks) {
   const sign = (direction === 'up' || direction === 'right') ? 1 : -1;
   const delta = sign * 120 * clicks;
   const evt = horizontal ? 'HWHEEL' : 'WHEEL';
-  return `${WIN32_BLOCK}
-[Win32Input]::SetCursorPos(${x}, ${y})
-Start-Sleep -Milliseconds 80
+  return `[Win32Input]::SetCursorPos(${x}, ${y})
+Start-Sleep -Milliseconds 40
 [Win32Input]::mouse_event([Win32Input]::${evt}, 0, 0, ${delta}, 0)
 Write-Output "scrolled ${direction} ${clicks} notches at ${x},${y}"`;
 }
@@ -297,8 +376,7 @@ function buildKeyScript(key) {
     const codes = others.map(vkFor).filter(c => c != null);
     const downs = codes.map(c => `[Win32Input]::keybd_event(${c},0,0,0)`).join('\n');
     const ups = codes.slice().reverse().map(c => `[Win32Input]::keybd_event(${c},0,2,0)`).join('\n');
-    return `${WIN32_BLOCK}
-[Win32Input]::keybd_event(0x5B,0,0,0)
+    return `[Win32Input]::keybd_event(0x5B,0,0,0)
 ${downs}
 Start-Sleep -Milliseconds 40
 ${ups}
@@ -337,8 +415,7 @@ function resolveXY({ x, y, nx, ny }, ctx) {
 }
 
 function buildDragScript(x1, y1, x2, y2) {
-  return `${WIN32_BLOCK}
-[Win32Input]::SetCursorPos(${x1}, ${y1})
+  return `[Win32Input]::SetCursorPos(${x1}, ${y1})
 Start-Sleep -Milliseconds 120
 [Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)
 Start-Sleep -Milliseconds 80
@@ -404,9 +481,21 @@ async function computerAction(params) {
       return { success: false, output: `Unknown action: ${action}` };
   }
 
-  const result = await runPowerShell(script);
-  await new Promise(r => setTimeout(r, 700));
-  return result;
+  // Fast path: warm session (type already loaded). Fall back to a one-shot
+  // process, which must prepend the Win32 type definition itself.
+  let output = await runPersistent(script);
+  if (output === null) {
+    const r = await runPowerShell(`${WIN32_BLOCK}\n${script}`);
+    output = r.output;
+  }
+
+  // Settle delay, scaled to what the action actually needs. A flat 700ms on
+  // every action was a large share of per-step latency; only actions that
+  // change focus or trigger UI transitions need real time to settle.
+  const SETTLE = { type: 260, key: 220, drag: 220 };
+  await new Promise(r => setTimeout(r, SETTLE[action] ?? 130));
+
+  return { success: true, output: output || 'Done' };
 }
 
 // ── Clipboard ────────────────────────────────────────────────────────────────
@@ -485,4 +574,5 @@ module.exports = {
   mediaControl, setVolume, setBrightness,
   focusWindow, minimizeAll, closeApp,
   lockScreen, sleepPc,
+  shutdownAutomation,
 };

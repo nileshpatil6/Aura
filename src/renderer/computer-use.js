@@ -57,6 +57,11 @@ class ComputerUseAgent {
     });
     if (!res.ok) {
       const txt = await res.text();
+      // 429 is common on the free tier and otherwise just looks like the agent
+      // hanging, so name it explicitly instead of dumping a raw quota blob.
+      if (res.status === 429) {
+        throw new Error('Gemini rate limit hit (429) — free-tier quota exhausted. Wait a minute or enable billing.');
+      }
       throw new Error(`Computer Use API ${res.status}: ${txt.slice(0, 300)}`);
     }
     return res.json();

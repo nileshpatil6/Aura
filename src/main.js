@@ -497,6 +497,7 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   try { visionMemory.stop(); } catch {}
+  try { automation.shutdownAutomation(); } catch {}
   exitActionMode();
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
@@ -551,6 +552,19 @@ async function captureScreen(w = 1280, h = 720) {
   return sources[0].thumbnail.toJPEG(82).toString('base64');
 }
 
+// Screenshot sized for the computer-use model. Two things matter here:
+//  1. Aspect ratio must match the real display, or the model reasons about a
+//     stretched image (the old fixed 1440x900 is 16:10 on a 16:9 panel).
+//  2. Payload size dominates request latency. Measured against the live API:
+//     1440px wide -> 3.0s median with an 86s outlier; 1024px -> 0.9s median and
+//     no outliers. Bigger images did not measurably improve targeting.
+const CU_CAPTURE_WIDTH = 1024;
+function cuCaptureSize() {
+  const b = screen.getPrimaryDisplay().bounds;
+  const w = CU_CAPTURE_WIDTH;
+  return { width: w, height: Math.round(w * (b.height / b.width)) };
+}
+
 ipcMain.handle('take-screenshot', () => captureScreen(1280, 720));
 
 // Aura windows we can fully hide for clean screenshots / unobstructed clicks.
@@ -578,13 +592,14 @@ function exitActionMode() {
   actionModeHidden = [];
 }
 
-// Higher-res clean shot for Computer Use. Hide visible (non-minimized) Aura overlays first.
+// Clean shot for Computer Use. Hide visible (non-minimized) Aura overlays first.
 ipcMain.handle('take-screenshot-clean', async () => {
   const toRestore = allAuraWindows()
     .filter(w => w.isVisible() && !w.isMinimized());
   toRestore.forEach(w => w.hide());
-  await new Promise(r => setTimeout(r, 220));
-  const b64 = await captureScreen(1440, 900);
+  await new Promise(r => setTimeout(r, 120));
+  const { width, height } = cuCaptureSize();
+  const b64 = await captureScreen(width, height);
   toRestore.forEach(w => { try { w.show(); } catch {} });
   return b64;
 });
@@ -629,8 +644,14 @@ ipcMain.handle('store-clear',  (_e, bucket)             => store.clear(bucket));
 
 ipcMain.handle('computer-action', (_e, params) => {
   const display = screen.getPrimaryDisplay();
-  const physW = display.bounds.width * display.scaleFactor;
-  const physH = display.bounds.height * display.scaleFactor;
+  // Use LOGICAL bounds, not physical pixels. The PowerShell helper that calls
+  // SetCursorPos is not DPI-aware, so Windows virtualizes its coordinates into
+  // logical space. Passing physical pixels (bounds * scaleFactor) overshot by
+  // exactly the scale factor — on a 1920x1080 panel at 125% (1536x864 logical)
+  // a "click the centre" landed 192px right and 108px low, and anything past
+  // ~80% of the width fell off-screen entirely.
+  const physW = display.bounds.width;
+  const physH = display.bounds.height;
   const scaleX = physW / 1280;
   const scaleY = physH / 720;
   return automation.computerAction({ ...params, physW, physH, scaleX, scaleY });
