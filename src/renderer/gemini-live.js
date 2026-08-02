@@ -513,7 +513,13 @@ class GeminiLive {
         result = await window.electronAPI.getSystemInfo(args.type);
       } else if (name === 'do_computer_task') {
         this.callbacks.onTranscript(`Computer task: ${args.goal}…`);
-        const apiKey = localStorage.getItem('gemini_api_key') || '';
+        // Read from electron-store first — that's where the dashboard Settings
+        // tab saves the key. This previously only checked localStorage, which is
+        // empty for anyone who set their key via Settings, so every voice-driven
+        // computer task failed with an unauthorized request.
+        let apiKey = '';
+        try { apiKey = await window.electronAPI?.storeGet('settings', 'apiKey') || ''; } catch {}
+        if (!apiKey) apiKey = localStorage.getItem('gemini_api_key') || '';
         const agent = new window.ComputerUseAgent({
           onStep: (s) => this.callbacks.onActivity?.({ kind: 'cu_step', ...s }),
           onLog:  (m) => this.callbacks.onTranscript(`  · ${m}`),

@@ -186,7 +186,7 @@ public class Win32Input {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, int d, int e);
     [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, int e);
-    public const uint LD=2,LU=4,RD=8,RU=16,WHEEL=0x800,MOVE=0x8001;
+    public const uint LD=2,LU=4,RD=8,RU=16,MD=0x20,MU=0x40,WHEEL=0x800,HWHEEL=0x1000,MOVE=0x8001;
 }
 '@
 if (-not ([System.Management.Automation.PSTypeName]'Win32Input').Type) {
@@ -208,18 +208,32 @@ Start-Sleep -Milliseconds 120
       return base + `[Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)\n[Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0)\nStart-Sleep -Milliseconds 80\n[Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)\n[Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0)\nWrite-Output "double-click at ${x},${y}"`;
     case 'move':
       return base + `Write-Output "moved to ${x},${y}"`;
+    case 'middle_click':
+      return base + `[Win32Input]::mouse_event([Win32Input]::MD,0,0,0,0)\nStart-Sleep -Milliseconds 60\n[Win32Input]::mouse_event([Win32Input]::MU,0,0,0,0)\nWrite-Output "middle-click at ${x},${y}"`;
+    case 'triple_click':
+      return base + `for ($i=0; $i -lt 3; $i++) { [Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0); [Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0); Start-Sleep -Milliseconds 70 }\nWrite-Output "triple-click at ${x},${y}"`;
+    case 'mouse_down':
+      return base + `[Win32Input]::mouse_event([Win32Input]::LD,0,0,0,0)\nWrite-Output "mouse down at ${x},${y}"`;
+    case 'mouse_up':
+      return base + `[Win32Input]::mouse_event([Win32Input]::LU,0,0,0,0)\nWrite-Output "mouse up at ${x},${y}"`;
     default:
       return `Write-Output "unknown action"`;
   }
 }
 
+// Gemini 3.x `scroll` gives direction + magnitude_in_pixels. Windows wheel
+// notches are 120 units each, so convert pixels -> notches (~100px per notch).
 function buildScrollScript(x, y, direction, clicks) {
-  const delta = direction === 'up' ? 120 * clicks : -120 * clicks;
+  const horizontal = direction === 'left' || direction === 'right';
+  // Wheel sign: up/right are positive, down/left negative.
+  const sign = (direction === 'up' || direction === 'right') ? 1 : -1;
+  const delta = sign * 120 * clicks;
+  const evt = horizontal ? 'HWHEEL' : 'WHEEL';
   return `${WIN32_BLOCK}
 [Win32Input]::SetCursorPos(${x}, ${y})
 Start-Sleep -Milliseconds 80
-[Win32Input]::mouse_event([Win32Input]::WHEEL, 0, 0, ${delta}, 0)
-Write-Output "scrolled ${direction} ${clicks} clicks at ${x},${y}"`;
+[Win32Input]::mouse_event([Win32Input]::${evt}, 0, 0, ${delta}, 0)
+Write-Output "scrolled ${direction} ${clicks} notches at ${x},${y}"`;
 }
 
 function buildTypeScript(text) {
@@ -233,20 +247,78 @@ $wsh.SendKeys('${escaped.replace(/'/g, "''")}')
 Write-Output "typed text"`;
 }
 
+// SendKeys tokens for non-printable keys.
+const SENDKEYS_SPECIAL = {
+  enter: '{ENTER}', return: '{ENTER}', tab: '{TAB}', escape: '{ESC}', esc: '{ESC}',
+  backspace: '{BACKSPACE}', delete: '{DELETE}', del: '{DELETE}', insert: '{INSERT}',
+  space: ' ', up: '{UP}', down: '{DOWN}', left: '{LEFT}', right: '{RIGHT}',
+  home: '{HOME}', end: '{END}', pageup: '{PGUP}', pagedown: '{PGDN}',
+  pgup: '{PGUP}', pgdn: '{PGDN}', capslock: '{CAPSLOCK}', printscreen: '{PRTSC}',
+};
+for (let i = 1; i <= 12; i++) SENDKEYS_SPECIAL[`f${i}`] = `{F${i}}`;
+
+// Virtual-key codes needed for the Windows key, which SendKeys cannot express.
+const VK = { win: 0x5B, ctrl: 0x11, control: 0x11, alt: 0x12, shift: 0x10, tab: 0x09, enter: 0x0D, escape: 0x1B, esc: 0x1B, delete: 0x2E, space: 0x20 };
+function vkFor(token) {
+  if (VK[token] != null) return VK[token];
+  if (/^f([1-9]|1[0-2])$/.test(token)) return 0x6F + Number(token.slice(1)); // F1=0x70
+  if (token.length === 1) return token.toUpperCase().charCodeAt(0);          // A-Z, 0-9
+  return null;
+}
+
+// Gemini's computer-use model emits X11 keysym names (verified against the live
+// API: it returns key:"Super_L" for the Windows key). Map those onto the names
+// used below, otherwise they'd fall through as literal SendKeys tokens and fail.
+const KEYSYM_ALIASES = {
+  super_l: 'win', super_r: 'win', super: 'win', meta_l: 'win', meta_r: 'win',
+  control_l: 'ctrl', control_r: 'ctrl', control: 'ctrl',
+  alt_l: 'alt', alt_r: 'alt', shift_l: 'shift', shift_r: 'shift',
+  return: 'enter', kp_enter: 'enter', backspace: 'backspace',
+  page_up: 'pageup', page_down: 'pagedown', prior: 'pageup', next: 'pagedown',
+  print: 'printscreen', caps_lock: 'capslock',
+};
+const normalizeKeyToken = (t) => KEYSYM_ALIASES[t] || t;
+
+// Accepts "enter", "ctrl+a", "win", "win+d", "ctrl+shift+n", X11 keysyms like
+// "Super_L", or an array of keys. Windows-key chords go through keybd_event
+// (SendKeys has no Win modifier); everything else uses SendKeys, which is more
+// reliable for text-entry targets.
 function buildKeyScript(key) {
-  const keyMap = {
-    'enter': '{ENTER}', 'tab': '{TAB}', 'escape': '{ESC}', 'esc': '{ESC}',
-    'backspace': '{BACKSPACE}', 'delete': '{DELETE}', 'space': ' ',
-    'up': '{UP}', 'down': '{DOWN}', 'left': '{LEFT}', 'right': '{RIGHT}',
-    'home': '{HOME}', 'end': '{END}', 'pageup': '{PGUP}', 'pagedown': '{PGDN}',
-    'f5': '{F5}', 'f11': '{F11}', 'ctrl+a': '^a', 'ctrl+c': '^c',
-    'ctrl+v': '^v', 'ctrl+z': '^z', 'ctrl+t': '^t', 'ctrl+w': '^w',
-    'ctrl+r': '^r', 'ctrl+l': '^l', 'ctrl+f': '^f',
-  };
-  const mapped = keyMap[key.toLowerCase()] || `{${key.toUpperCase()}}`;
+  const raw = Array.isArray(key) ? key.join('+') : String(key || 'enter');
+  const parts = raw.toLowerCase().split('+')
+    .map(s => normalizeKeyToken(s.trim()))
+    .filter(Boolean);
+  const label = parts.join('+');
+
+  const hasWin = parts.some(p => p === 'win' || p === 'super' || p === 'meta' || p === 'cmd');
+
+  if (hasWin) {
+    const others = parts.filter(p => !['win', 'super', 'meta', 'cmd'].includes(p));
+    const codes = others.map(vkFor).filter(c => c != null);
+    const downs = codes.map(c => `[Win32Input]::keybd_event(${c},0,0,0)`).join('\n');
+    const ups = codes.slice().reverse().map(c => `[Win32Input]::keybd_event(${c},0,2,0)`).join('\n');
+    return `${WIN32_BLOCK}
+[Win32Input]::keybd_event(0x5B,0,0,0)
+${downs}
+Start-Sleep -Milliseconds 40
+${ups}
+[Win32Input]::keybd_event(0x5B,0,2,0)
+Write-Output "pressed ${label}"`;
+  }
+
+  let prefix = '';
+  let base = '';
+  for (const p of parts) {
+    if (p === 'ctrl' || p === 'control') prefix += '^';
+    else if (p === 'alt') prefix += '%';
+    else if (p === 'shift') prefix += '+';
+    else base = SENDKEYS_SPECIAL[p] || (p.length === 1 ? p : `{${p.toUpperCase()}}`);
+  }
+  if (!base) base = '';
+  const seq = (prefix + base).replace(/'/g, "''");
   return `$wsh = New-Object -ComObject WScript.Shell
-$wsh.SendKeys('${mapped}')
-Write-Output "pressed ${key}"`;
+$wsh.SendKeys('${seq}')
+Write-Output "pressed ${label}"`;
 }
 
 // Resolve coordinates: accept normalized (nx/ny in 0-999) OR pixel (x/y in 1280x720 space).
@@ -298,6 +370,10 @@ async function computerAction(params) {
     case 'click':
     case 'right_click':
     case 'double_click':
+    case 'triple_click':
+    case 'middle_click':
+    case 'mouse_down':
+    case 'mouse_up':
     case 'move':
       script = buildMouseScript(sx, sy, action);
       break;
@@ -306,6 +382,12 @@ async function computerAction(params) {
       break;
     case 'scroll_up':
       script = buildScrollScript(sx, sy, 'up', scrollClicks);
+      break;
+    case 'scroll_left':
+      script = buildScrollScript(sx, sy, 'left', scrollClicks);
+      break;
+    case 'scroll_right':
+      script = buildScrollScript(sx, sy, 'right', scrollClicks);
       break;
     case 'type':
       script = buildTypeScript(text || '');

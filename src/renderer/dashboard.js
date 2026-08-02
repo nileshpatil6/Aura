@@ -123,7 +123,7 @@ async function sendToGemini(text) {
   const sysParts = ['You are Aura, a powerful Windows desktop AI assistant. Be concise and direct.'];
   if (memory.name) sysParts.push(`User's name: ${memory.name}`);
   if (memory.notes?.length) sysParts.push(`Notes about the user:\n${memory.notes.join('\n')}`);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -178,7 +178,7 @@ src/
 | Layer | Technology |
 |---|---|
 | Application shell | Electron 33 — frameless, transparent, always-on-top windows |
-| Reasoning | Gemini 3 Flash (`gemini-3-flash-preview`) |
+| Reasoning | Gemini 3 Flash (`gemini-3.6-flash`) |
 | Voice | Gemini Live API (`gemini-3.1-flash-live-preview`), full-duplex over WebSocket |
 | Persistence | `electron-store` — settings, memory, macros, history, activity log |
 | Audio analysis | Web Audio API (`AudioContext`, `AnalyserNode`) — real microphone-driven visualization |
