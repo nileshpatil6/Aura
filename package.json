@@ -2,6 +2,12 @@
   "name": "aura",
   "version": "1.0.0",
   "description": "Aura - AI-powered voice assistant overlay for Windows",
+  "author": "Nilesh Patil",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nileshpatil6/Aura.git"
+  },
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",

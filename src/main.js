@@ -52,7 +52,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false,
+      webSecurity: true,
     },
   });
 
@@ -97,7 +97,7 @@ function createDashboard() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false,
+      webSecurity: true,
     },
   });
   dashboardWindow.loadFile(path.join(__dirname, 'renderer', 'dashboard.html'));
@@ -125,7 +125,7 @@ function openAsk(context) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false,
+      webSecurity: true,
     },
   });
   askWindow.loadFile(path.join(__dirname, 'renderer', 'ask.html'));
@@ -275,7 +275,7 @@ function openAgent() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false,
+      webSecurity: true,
     },
   });
   agentWindow.loadFile(path.join(__dirname, 'renderer', 'agent.html'));

@@ -1,0 +1,26 @@
+Copyright (c) 2026 Nilesh Patil
+
+All rights reserved.
+
+This software and its source code are made available for personal and
+evaluation use only. You may view, download, build, and run this software
+for your own personal, non-commercial purposes.
+
+You may not, without prior written permission from the copyright holder:
+
+  1. Use this software or any part of it for commercial purposes;
+  2. Redistribute, sublicense, sell, or offer it as a service;
+  3. Publish modified versions of it.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+NOTE ON AUTOMATION: This software can control the mouse, keyboard, and shell
+of the machine it runs on, and can act on instructions produced by a language
+model. It is provided without warranty of correctness or safety. You are
+responsible for supervising its actions and for any consequences of running it.
