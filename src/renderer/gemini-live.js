@@ -4,7 +4,7 @@ const MODEL = 'models/gemini-3.1-flash-live-preview';
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 
-const SYSTEM_PROMPT = `You are Aura, a powerful Windows desktop AI assistant (like a smarter Siri). You can control the computer using tools.
+const SYSTEM_PROMPT = `You are Aura, a powerful Windows desktop AI assistant (like a Jarvis). You can control the computer using tools.
 
 CAPABILITIES:
 - open_application: Open any app (WhatsApp, Chrome, Spotify, VS Code, Notepad, Settings, etc.)
@@ -443,12 +443,21 @@ class GeminiLive {
         return;
       }
 
+      if (msg.toolCallCancellation) {
+        // User interrupted with new input while a tool (e.g. do_computer_task) was
+        // still running — stop it immediately instead of letting it keep clicking
+        // in the background while the model starts handling the new request.
+        this._log('toolCallCancellation — aborting running tool', msg.toolCallCancellation);
+        this._cuAgent?.abort();
+      }
+
       if (msg.serverContent) {
         const sc = msg.serverContent;
         if (sc.interrupted) {
           this.audioQueue = [];
           this.isPlaying = false;
           this.nextPlayTime = 0;
+          this._cuAgent?.abort();
           this.callbacks.onStateChange('listening');
           return;
         }
