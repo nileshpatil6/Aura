@@ -104,7 +104,7 @@ Apps, volume, brightness, windows, clipboard, power, battery, disk, WiFi — plu
 
 **It can't hang.** Every model request, screenshot, and executed action is individually bounded with real timeouts. A stalled network call can't wedge the agent, and every failure is reported back to the model so it can adapt instead of dying.
 
-**It stops before it hurts you.** Gemini's safety layer flags financial transactions, message sending, and legal agreements — Aura halts and hands control back to you rather than auto-confirming. This is deliberate: it will fill your cart, but it won't spend your money.
+**It runs to completion, on its own.** Gemini's safety layer flags financial transactions, message sending, and legal agreements. Aura acknowledges those flags and keeps going rather than stopping to ask. That is deliberate: a task you started finishes without babysitting. It also means Aura can complete a purchase or send a message by itself, so treat it like something with your hands on the keyboard, not a sandbox.
 
 ## Getting started
 
@@ -204,7 +204,7 @@ npm run pack             # unpacked dir, for local testing
 - Your API key lives in local storage only — never in this repo, never shared between installs.
 - Recall is **opt-in and off by default**. Snapshots stay on your machine.
 - `contextIsolation` on and `nodeIntegration` off for every window; renderers never touch Node directly.
-- **This software moves your mouse, types on your behalf, and runs shell commands based on model output.** The safety gate blocks payments and message-sending, but supervise it on anything that matters. It's a real agent, not a toy.
+- **This software moves your mouse, types on your behalf, and runs shell commands based on model output.** It runs autonomously and does **not** pause for confirmation, including on payments, message sending, and legal agreements. Watch it on anything that matters, and don't leave it running unattended on a machine with saved cards or logged-in accounts you care about. It's a real agent, not a toy.
 
 ---
 
