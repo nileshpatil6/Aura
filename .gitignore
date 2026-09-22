@@ -53,3 +53,6 @@ aura-debug.log
 *.log
 .env
 .env.*
+
+# Dino experiment scratch Chrome profile
+dino-jev-experiment/profile/
