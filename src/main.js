@@ -512,7 +512,7 @@ app.whenReady().then(() => {
 
   const cfg = jevConfig();
   if (cfg.enabled) uia.uiaWarm();
-  debugLog(`jev key source=${cfg.source || 'none'} enabled=${cfg.enabled}`);
+  debugLog(`jev key source=${cfg.source || 'none'} enabled=${cfg.enabled} jevOnly=${cfg.jevOnly}`);
 });
 
 app.on('will-quit', () => {
@@ -611,8 +611,12 @@ function jevConfig() {
   });
   const enabled = store.get('settings', 'jevEnabled') !== false &&
     process.env.AURA_JEV !== '0' && !!key && process.platform === 'win32';
-  return { enabled, key, source };
+  // Temporary test mode: computer-use never falls back to Gemini vision, so every
+  // click/type comes from Jev. Flip JEV_ONLY_DEFAULT or set AURA_JEV_ONLY=0 to restore the hybrid.
+  const jevOnly = process.env.AURA_JEV_ONLY ? process.env.AURA_JEV_ONLY !== '0' : JEV_ONLY_DEFAULT;
+  return { enabled, key, source, jevOnly };
 }
+const JEV_ONLY_DEFAULT = true;
 
 // Physical-pixel rects of every visible, non-minimized Aura window, so the
 // UIA host can exclude our own pill/dashboard/agent windows from clicks.
@@ -746,7 +750,7 @@ ipcMain.handle('computer-action', (_e, params) => {
 // ── Jev / UIA ────────────────────────────────────────────────────────────
 ipcMain.handle('jev-status', () => {
   const cfg = jevConfig();
-  return { enabled: cfg.enabled, hasKey: !!cfg.key, source: cfg.source };
+  return { enabled: cfg.enabled, hasKey: !!cfg.key, source: cfg.source, jevOnly: cfg.jevOnly };
 });
 
 ipcMain.handle('uia-snapshot', async () => {
@@ -855,7 +859,7 @@ ipcMain.handle('jev-decide', async (_e, params) => {
     return { ok: false, error: 'stale_snapshot' };
   }
 
-  const ctx = { goal, history: history || [], excludeKeys: excludeKeys || [], executedCount: executedCount || 0 };
+  const ctx = { goal, history: history || [], excludeKeys: excludeKeys || [], executedCount: executedCount || 0, jevOnly: cfg.jevOnly };
   const built = buildJevRequest(lastSnapshot, ctx);
   const r = await jevCall({ key: cfg.key, state: built.state, questions: built.questions, timeoutMs: 4000 });
   if (!r.ok) return { ok: false, error: r.error, status: r.status, ms: r.ms };

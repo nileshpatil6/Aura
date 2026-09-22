@@ -10,6 +10,10 @@ const THRESHOLDS = Object.freeze({
   stuck: 0.85,      // stuck noul at/above which we hand the step to vision
 });
 
+// Jev-only mode has no vision fallback, so a hesitant-but-correct pick beats giving up.
+// Typed text is still verbatim from the task (I9), which keeps the lower bar safe.
+const JEV_ONLY_THRESHOLDS = Object.freeze({ ...THRESHOLDS, action: 0.6, typeAction: 0.55, text: 0.6 });
+
 const LIMITS = Object.freeze({
   maxOptions: 255,      // Jev hard cap on choice options
   maxElements: 200,     // element options (e1..eN) per request
@@ -306,6 +310,7 @@ function interpretJevAnswers(answers, built, ctx) {
   const stuckVal = stuckValid ? stuckAns.noul : 0;
   const top2 = actionValid ? top2Of(action.probabilities) : [];
   const base = { choice, conf, goal: goalVal, stuck: stuckVal, top2 };
+  const T = ctx && ctx.jevOnly ? JEV_ONLY_THRESHOLDS : THRESHOLDS;
 
   // 1. bad answer shape / unknown choice
   if (!actionValid || !goalValid || !stuckValid || !(choice in built.optionMap)) {
@@ -313,12 +318,12 @@ function interpretJevAnswers(answers, built, ctx) {
   }
 
   // 2. goal reached
-  if (goalVal >= THRESHOLDS.goal && ctx.executedCount >= 1) {
+  if (goalVal >= T.goal && ctx.executedCount >= 1) {
     return { ok: true, kind: 'done', ...base };
   }
 
   // 3. stuck
-  if (stuckVal >= THRESHOLDS.stuck) {
+  if (stuckVal >= T.stuck) {
     return { ok: true, kind: 'vision', reason: 'stuck', ...base };
   }
 
@@ -336,7 +341,7 @@ function interpretJevAnswers(answers, built, ctx) {
 
   // 6. typing option
   if (opt.kind === 'type') {
-    if (conf < THRESHOLDS.typeAction) {
+    if (conf < T.typeAction) {
       return { ok: true, kind: 'vision', reason: 'low_conf', ...base };
     }
 
@@ -355,7 +360,7 @@ function interpretJevAnswers(answers, built, ctx) {
       if (textAns.choice === 'x0') {
         return { ok: true, kind: 'vision', reason: 'text_none', ...base, textConf };
       }
-      if (textConf < THRESHOLDS.text) {
+      if (textConf < T.text) {
         return { ok: true, kind: 'vision', reason: 'text_low_conf', ...base, textConf };
       }
       const m = /^x(\d+)$/.exec(textAns.choice);
@@ -374,7 +379,7 @@ function interpretJevAnswers(answers, built, ctx) {
   }
 
   // 7. any other choice below the action-confidence bar
-  if (conf < THRESHOLDS.action) {
+  if (conf < T.action) {
     return { ok: true, kind: 'vision', reason: 'low_conf', ...base };
   }
 

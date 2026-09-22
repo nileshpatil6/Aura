@@ -199,6 +199,29 @@ class ComputerUseAgent {
           return `Stopped after ${Math.round(maxMs / 1000)}s time limit. ${lastSummary || ''}`.trim();
         }
 
+        if (jevStatus.jevOnly) {
+          // Jev-only test mode: no Gemini vision fallback. Unhandled steps are retried
+          // after a short settle; three in a row ends the run.
+          if (!jevStatus.enabled || this._jevOff) {
+            return 'Jev-only mode: Jev is unavailable (no key, disabled, or repeated API errors).';
+          }
+          const r = await this._jevStep({ goal, step });
+          if (this.aborted) return 'Cancelled.';
+          if (r.handled) {
+            if (r.result !== undefined) return r.result;
+            this._jevMisses = 0;
+            continue;
+          }
+          this._jevMisses = (this._jevMisses || 0) + 1;
+          this._log(`jev-only: step not handled${r.reason ? ` (${r.reason})` : ''}, miss ${this._jevMisses}/3`);
+          if (this._jevMisses >= 3) {
+            const last = this._history.slice(-3).map(h => h.desc).join('; ');
+            return `Jev-only mode: stopped, Jev could not find the next action on this screen.${last ? ` Did: ${last}` : ''}`;
+          }
+          await new Promise(res => setTimeout(res, 500));
+          continue;
+        }
+
         const useJev = !this._jevOff && jevStatus.enabled && this._jevSkip === 0 && this._uiaCooldown === 0;
         if (!useJev) {
           if (this._jevSkip > 0) this._jevSkip--;
