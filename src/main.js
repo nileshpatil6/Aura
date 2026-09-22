@@ -4,6 +4,10 @@ const fs = require('fs');
 const automation = require('./automation');
 const store = require('./store');
 const visionMemory = require('./vision-memory');
+const uia = require('./uia');
+const { jevCall } = require('./jev');
+const { buildJevRequest, interpretJevAnswers, snapshotSignature } = require('./jev-step');
+const { resolveJevKey } = require('./env-keys');
 
 let mainWindow = null;
 let dashboardWindow = null;
@@ -14,6 +18,7 @@ let agentWindow = null;
 let tray = null;
 let isVisible = false;
 let actionModeHidden = [];  // windows we hid during action mode
+let lastSnapshot = null;    // full UiaSnapshot (with elements) from the most recent uia-snapshot call
 
 const COLLAPSED_W  = 96;  // initial guess only — renderer reports its real size once painted
 const COLLAPSED_H  = 56;
@@ -504,12 +509,17 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  const cfg = jevConfig();
+  if (cfg.enabled) uia.uiaWarm();
+  debugLog(`jev key source=${cfg.source || 'none'} enabled=${cfg.enabled}`);
 });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   try { visionMemory.stop(); } catch {}
   try { automation.shutdownAutomation(); } catch {}
+  try { uia.shutdownUia(); } catch {}
   exitActionMode();
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
@@ -590,6 +600,30 @@ function allAuraWindows() {
   if (agentWindow && !agentWindow.isDestroyed()) list.push(agentWindow);
   return list;
 }
+
+// Resolved lazily on every jev-status/jev-decide call (cheap — env-keys.js
+// caches the .env read) so a settings edit takes effect without a restart.
+function jevConfig() {
+  const settingsKey = store.get('settings', 'jevApiKey');
+  const { key, source } = resolveJevKey({
+    settingsKey,
+    searchDirs: [...new Set([app.getAppPath(), process.cwd()])],
+  });
+  const enabled = store.get('settings', 'jevEnabled') !== false &&
+    process.env.AURA_JEV !== '0' && !!key && process.platform === 'win32';
+  return { enabled, key, source };
+}
+
+// Physical-pixel rects of every visible, non-minimized Aura window, so the
+// UIA host can exclude our own pill/dashboard/agent windows from clicks.
+function auraPhysicalRects() {
+  return allAuraWindows()
+    .filter(w => w.isVisible() && !w.isMinimized())
+    .map((win) => {
+      const r = screen.dipToScreenRect(win, win.getBounds());
+      return [r.x, r.y, r.width, r.height];
+    });
+}
 function enterActionMode() {
   if (actionModeHidden.length) return;
   actionModeHidden = hideableAuraWindows().filter(w => w.isVisible());
@@ -665,8 +699,31 @@ ipcMain.handle('get-log-path', () => DEBUG_LOG);
 ipcMain.on('open-log', () => { try { shell.showItemInFolder(DEBUG_LOG); } catch {} });
 
 // Store IPC
-ipcMain.handle('store-get',    (_e, bucket, key)        => store.get(bucket, key));
-ipcMain.handle('store-set',    (_e, bucket, key, value) => store.set(bucket, key, value));
+// 'settings' gets special handling so the Jev key (I2) never crosses into a
+// renderer, whether read directly or as part of the whole bucket the
+// dashboard's Settings tab fetches — and so that tab's "save" (which writes
+// back a plain object of the fields IT knows about) doesn't silently wipe a
+// jevApiKey/jevEnabled it never saw.
+ipcMain.handle('store-get', (_e, bucket, key) => {
+  if (bucket === 'settings') {
+    if (key === 'jevApiKey') return '';
+    if (key === undefined) {
+      const { jevApiKey, ...safe } = store.get('settings') || {};
+      return safe;
+    }
+  }
+  return store.get(bucket, key);
+});
+ipcMain.handle('store-set', (_e, bucket, key, value) => {
+  if (bucket === 'settings' && value === undefined && key && typeof key === 'object') {
+    const existing = store.get('settings') || {};
+    const merged = { ...key };
+    if (!('jevApiKey' in merged)) merged.jevApiKey = existing.jevApiKey || '';
+    if (!('jevEnabled' in merged)) merged.jevEnabled = existing.jevEnabled !== false;
+    return store.set(bucket, merged);
+  }
+  return store.set(bucket, key, value);
+});
 ipcMain.handle('store-push',   (_e, bucket, item)       => store.push(bucket, item));
 ipcMain.handle('store-remove', (_e, bucket, id)         => store.remove(bucket, id));
 ipcMain.handle('store-clear',  (_e, bucket)             => store.clear(bucket));
@@ -684,4 +741,130 @@ ipcMain.handle('computer-action', (_e, params) => {
   const scaleX = physW / 1280;
   const scaleY = physH / 720;
   return automation.computerAction({ ...params, physW, physH, scaleX, scaleY });
+});
+
+// ── Jev / UIA ────────────────────────────────────────────────────────────
+ipcMain.handle('jev-status', () => {
+  const cfg = jevConfig();
+  return { enabled: cfg.enabled, hasKey: !!cfg.key, source: cfg.source };
+});
+
+ipcMain.handle('uia-snapshot', async () => {
+  const auraRects = auraPhysicalRects();
+  let snap = await uia.uiaSnapshot({ excludePid: process.pid, auraRects, maxElements: 200 });
+  // A sentinel collision (host text containing the raw stdout sentinel) or
+  // any other malformed-but-"ok" host response could hand back a snapshot
+  // with no elements array; guard instead of throwing inside an IPC handler
+  // (I3 — handlers must always resolve).
+  if (snap && snap.ok && !Array.isArray(snap.elements)) {
+    snap = { ok: false, reason: 'error', detail: 'malformed snapshot' };
+  }
+  if (snap.ok) {
+    snap.sig = snapshotSignature(snap);
+    lastSnapshot = snap;
+    debugLog(`[uia] ${snap.process} "${(snap.title || '').slice(0, 40)}" elems=${snap.elements.length}/${snap.total} host=${snap.ms}ms`);
+  } else {
+    lastSnapshot = null;
+    debugLog(`[uia] FAIL ${snap.reason}${snap.detail ? ' ' + snap.detail : ''}`);
+  }
+  return snap;
+});
+
+ipcMain.handle('uia-act', async (_e, params) => {
+  const { snapshotId, elementId, op, text, direction, key } = params || {};
+  if (!lastSnapshot || snapshotId !== lastSnapshot.snapshotId) {
+    return { ok: false, reason: 'stale_snapshot' };
+  }
+  const el = elementId ? lastSnapshot.elements.find(e => e.id === elementId) : null;
+  let result;
+  const t0 = Date.now();
+
+  if (op === 'click' || op === 'scroll') {
+    if (op === 'click' && !el) {
+      result = { ok: false, reason: 'stale_element' };
+    } else {
+      result = await uia.uiaAct({ snapshotId, index: el ? el.i : undefined, op, direction });
+    }
+  } else if (op === 'type') {
+    if (!el) {
+      result = { ok: false, reason: 'stale_element' };
+    } else {
+      const canSetValue = Array.isArray(el.pats) && el.pats.includes('value') && !el.readOnly &&
+        (el.type === 'Edit' || el.type === 'ComboBox') && lastSnapshot.fw !== 'Chrome';
+      let handled = false;
+      if (canSetValue) {
+        // Sub-op timeouts capped well below the renderer's 8000ms uiaAct
+        // budget: set_value(2000) + focus(2000) + two SendKeys calls + the
+        // 300ms settle below must all fit inside it, or the renderer's own
+        // withTimeout fires while this handler is still mid-flight and a
+        // later SendKeys call can land on whatever window is foreground by then.
+        const svRes = await uia.uiaAct({ snapshotId, index: el.i, op: 'set_value', text, timeoutMs: 2000 });
+        if (svRes.reason === 'timeout') {
+          // Outcome unknown, not failed — and the host may have just been
+          // killed/regenerated for this, so don't chase it with focus/SendKeys
+          // against what could now be a stale generation.
+          result = svRes; handled = true;
+        } else if (svRes.ok && svRes.verified) {
+          result = svRes; handled = true;
+        }
+      }
+      if (!handled) {
+        const focusRes = await uia.uiaAct({ snapshotId, index: el.i, op: 'focus', timeoutMs: 2000 });
+        if (!focusRes.ok && !el.focused) {
+          result = focusRes;
+        } else {
+          let ok = true;
+          if (el.type === 'Edit' || el.type === 'ComboBox') {
+            const ctrlARes = await automation.computerAction({ action: 'key', key: 'ctrl+a' });
+            if (!ctrlARes || !ctrlARes.success) ok = false;
+          }
+          // Past the budget the renderer may already have moved on; typing now could hit another window.
+          if (!ok || Date.now() - t0 > 5000) {
+            result = { ok: false, reason: ok ? 'timeout' : 'error', detail: 'skipped typing', ms: Date.now() - t0 };
+          } else {
+            const typeRes = await automation.computerAction({ action: 'type', text: text || '' });
+            if (!typeRes || !typeRes.success) ok = false;
+          }
+          if (!result) result = ok
+            ? { ok: true, method: 'sendkeys', ms: Date.now() - t0 }
+            : { ok: false, reason: 'error', detail: 'sendkeys failed', ms: Date.now() - t0 };
+        }
+      }
+    }
+  } else if (op === 'key') {
+    const keyRes = await automation.computerAction({ action: 'key', key });
+    result = (keyRes && keyRes.success)
+      ? { ok: true, method: 'key', ms: Date.now() - t0 }
+      : { ok: false, reason: 'error', detail: 'key action failed', ms: Date.now() - t0 };
+  } else {
+    result = { ok: false, reason: 'unsupported' };
+  }
+
+  // Patterns return before the UI repaints — settle here so the NEXT snapshot's
+  // no-effect detection compares against post-action state, not mid-transition.
+  await new Promise(r => setTimeout(r, 300));
+  return result;
+});
+
+ipcMain.handle('jev-decide', async (_e, params) => {
+  const cfg = jevConfig();
+  if (!cfg.enabled) return { ok: false, error: 'disabled' };
+
+  const { snapshotId, goal, history, excludeKeys, executedCount } = params || {};
+  if (!lastSnapshot || snapshotId !== lastSnapshot.snapshotId) {
+    return { ok: false, error: 'stale_snapshot' };
+  }
+
+  const ctx = { goal, history: history || [], excludeKeys: excludeKeys || [], executedCount: executedCount || 0 };
+  const built = buildJevRequest(lastSnapshot, ctx);
+  const r = await jevCall({ key: cfg.key, state: built.state, questions: built.questions, timeoutMs: 4000 });
+  if (!r.ok) return { ok: false, error: r.error, status: r.status, ms: r.ms };
+
+  const decision = interpretJevAnswers(r.answers, built, ctx);
+  const top2Str = (decision.top2 || []).map(([k, p]) => `${k}:${p.toFixed(2)}`).join(',');
+  debugLog(`[jev] s=${snapshotId} elems=${lastSnapshot.elements.length}/${lastSnapshot.total} tok~${built.approxTokens} ` +
+    `choice=${decision.choice} conf=${decision.conf.toFixed(2)} goal=${decision.goal.toFixed(2)} stuck=${decision.stuck.toFixed(2)} ` +
+    `top2=${top2Str} ${r.ms}ms -> ${decision.kind}${decision.op ? '/' + decision.op : ''}${decision.reason ? '/' + decision.reason : ''} ${decision.target || ''}`);
+
+  return { ...decision, ms: r.ms, usage: r.usage };
 });

@@ -15,6 +15,8 @@ const store = new Store({
       theme: 'jarvis',
       verboseLogging: true,
       pushToTalk: false,
+      jevEnabled: true,
+      jevApiKey: '',
     },
     history: [],        // [{ id, ts, role, text }]
     automations: [],    // [{ id, name, steps: [{ kind, ... }] }]

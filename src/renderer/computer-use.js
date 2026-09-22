@@ -156,6 +156,12 @@ class ComputerUseAgent {
 
   // maxMs bounds total wall time. Without it a task that never emits DONE runs
   // every step to the limit, which reads as the app being frozen.
+  //
+  // Hybrid loop: each iteration tries the fast Jev/UIA element-click path
+  // first (see _jevStep) and only falls back to the Gemini vision path
+  // (_visionStep, the original per-step body below) when Jev is off, errors
+  // repeatedly, or itself says it needs vision. Without a Jev key/flag,
+  // jevStatus().enabled is false and this is byte-for-byte the old loop.
   async run({ apiKey, goal, maxSteps = 12, maxMs = 90000 }) {
     this.aborted = false;
     if (!apiKey) throw new Error('No Gemini API key — set one in the dashboard Settings tab.');
@@ -168,102 +174,307 @@ class ComputerUseAgent {
 
     let lastSummary = '';
 
-    for (let step = 0; step < maxSteps; step++) {
-      if (this.aborted) return 'Cancelled.';
-      if (Date.now() > deadline) {
-        return `Stopped after ${Math.round(maxMs / 1000)}s time limit. ${lastSummary || ''}`.trim();
-      }
+    // Per-run Jev/UIA state (contract 3.8).
+    this._history = [];              // StepRecord[]
+    this._pendingForGemini = [];     // StepRecord[] executed by Jev since the last Gemini turn
+    this._prevJev = null;            // { sig, key, step } | null
+    this._excludeKeys = new Set();
+    this._excludeHwnd = null;
+    this._jevErrors = 0;
+    this._consecNoEffect = 0;
+    this._consecFallbacks = 0;
+    this._jevSkip = 0;
+    this._uiaCooldown = 0;
+    this._jevOff = false;
+    this.executedCount = 0;
+    this._counters = { jev: 0, gemini: 0 };
 
-      this._log(`step ${step + 1}/${maxSteps}: capturing screen`);
-      // Capture clean screenshot (all Aura windows hidden by action mode).
-      // Bounded: this IPC hides windows and drives desktopCapturer, which can
-      // wedge — and an unbounded wait here strands the whole tool call.
-      const b64 = await withTimeout(
-        window.electronAPI.takeScreenshotClean(), TIMEOUTS.screenshot, 'screenshot');
-      if (!b64) throw new Error('Screenshot failed');
+    let jevStatus = { enabled: false };
+    try { jevStatus = await window.electronAPI.jevStatus(); } catch { jevStatus = { enabled: false }; }
 
-      // Strip earlier screenshots — keep only the latest to control request size
-      for (const c of contents) {
-        if (c.parts) c.parts = c.parts.filter(p => !p.inlineData);
-      }
-
-      contents.push({
-        role: 'user',
-        parts: [{ inlineData: { mimeType: 'image/jpeg', data: b64 } }],
-      });
-
-      const body = {
-        systemInstruction: { parts: [{ text: CU_SYSTEM_PROMPT }] },
-        contents,
-        tools: this._buildTools(),
-        generationConfig: { thinkingConfig: { thinkingLevel: 'low' } },
-      };
-
-      this._log(`step ${step + 1}: requesting next action`);
-      const resp = await this._post(apiKey, body);
-      if (this.aborted) return 'Cancelled.';
-      const cand = resp.candidates?.[0];
-      const parts = cand?.content?.parts || [];
-      // Preserve the WHOLE part (including thoughtSignature) so we can echo it back
-      const fcPart = parts.find(p => p.functionCall);
-      const fc = fcPart?.functionCall;
-      const txt = parts.find(p => p.text)?.text;
-
-      if (txt) {
-        this.onLog(txt.slice(0, 160));
-        if (/^\s*DONE:/i.test(txt)) {
-          return txt.replace(/^\s*DONE:\s*/i, '').slice(0, 200);
+    try {
+      for (let step = 0; step < maxSteps; step++) {
+        if (this.aborted) return 'Cancelled.';
+        if (Date.now() > deadline) {
+          return `Stopped after ${Math.round(maxMs / 1000)}s time limit. ${lastSummary || ''}`.trim();
         }
+
+        const useJev = !this._jevOff && jevStatus.enabled && this._jevSkip === 0 && this._uiaCooldown === 0;
+        if (!useJev) {
+          if (this._jevSkip > 0) this._jevSkip--;
+          if (this._uiaCooldown > 0) this._uiaCooldown--;
+        }
+
+        if (useJev) {
+          const r = await this._jevStep({ goal, step });
+          if (this.aborted) return 'Cancelled.';
+          if (r.handled) {
+            if (r.result !== undefined) return r.result;
+            continue; // executed via Jev — next iteration
+          }
+          // not handled: fall through to vision for THIS SAME iteration
+        }
+
+        const vr = await this._visionStep({ apiKey, goal, contents, step, maxSteps, lastSummary });
+        if (this.aborted) return 'Cancelled.';
+        if (vr.done !== undefined) return vr.done;
+
+        lastSummary = vr.summary;
+        this._counters.gemini++;
+        this.executedCount++;
+        this._history.push({
+          step: step + 1, source: 'gemini', desc: lastSummary,
+          outcome: /^[^:]*:\s*failed:/.test(lastSummary) ? 'failed' : 'ok',
+        });
+        this._prevJev = null;
       }
 
-      if (!fc) {
-        return txt || lastSummary || 'Stopped (no action returned).';
-      }
+      return `Stopped after ${maxSteps} steps.`;
+    } finally {
+      this._log(`run: ${this.executedCount} steps (${this._counters.jev} jev, ${this._counters.gemini} gemini)`);
+    }
+  }
 
-      const args = fc.args || {};
+  // ── Jev / UIA element-targeted step ─────────────────────────────────────
+  // Renderer has no require() (contextIsolation) — it consumes snap.sig and
+  // decisions as opaque strings/objects rather than importing jev-step.js.
+  _elementKeyLocal(el) {
+    return `${el.type}|${el.name}|${el.aid}`;
+  }
 
-      // Gemini 3.x may attach a safety_decision requiring human approval.
-      // User wants full autonomy — never halt or prompt, just proceed.
-      const safety = args.safety_decision;
-      if (safety && safety.decision === 'require_confirmation') {
-        this.onLog(`⚠ Safety flag ignored: ${safety.explanation || ''}`);
-      }
+  _formatPendingLine(entry, i) {
+    const outcomeText = { ok: 'ok', failed: 'failed', no_effect: 'no visible change', unknown: 'result unknown' }[entry.outcome] || 'result unknown';
+    return `${i + 1}. [${entry.source}] ${entry.desc} -> ${outcomeText}`;
+  }
 
-      // Push the model's turn back into history — KEEP thoughtSignature
-      contents.push({ role: 'model', parts: [fcPart] });
+  _describeJevAction(d) {
+    if (d.op === 'click') return `clicked ${d.target}`;
+    if (d.op === 'type') return `typed "${d.text}" into ${d.target}`;
+    if (d.op === 'key') return `pressed ${d.key}`;
+    if (d.op === 'scroll') return `scrolled ${d.direction}`;
+    return d.op || 'acted';
+  }
 
-      if (args.intent) this._log(`· ${args.intent}`);
-      this.onStep({ action: fc.name, args });
-      let result;
-      try {
-        result = await withTimeout(
-          this._executeAction(fc.name, args), TIMEOUTS.action, `action ${fc.name}`);
-      } catch (e) {
-        // Report the failure to the model instead of aborting — it can adapt.
-        result = `failed: ${e.message}`;
-        this._log(`action ${fc.name} FAILED: ${e.message}`);
-      }
-      this._log(`step ${step + 1} done -> ${result}`);
-      lastSummary = `${fc.name}: ${result}`;
+  // Returns { handled:true, result?:string } | { handled:false }. One call =
+  // at most one executed action (invariant I6): a failure before any input is
+  // sent (stale snapshot/element, occluded, unsupported) returns handled:false
+  // so the SAME loop iteration falls through to vision instead of burning a step.
+  async _jevStep({ goal, step }) {
+    const api = window.electronAPI;
 
-      const response = { url: 'aura://desktop', output: result };
-      // The API rejects the NEXT request with a 400 unless a safety_decision
-      // that required confirmation is explicitly acknowledged here.
-      if (safety && safety.decision === 'require_confirmation') {
-        response.safety_acknowledgement = 'true';
-      }
-      contents.push({
-        role: 'user',
-        parts: [{
-          functionResponse: {
-            name: fc.name,
-            response,
-          },
-        }],
-      });
+    let snap;
+    try {
+      snap = await withTimeout(api.uiaSnapshot(), 3500, 'uia-snapshot');
+    } catch {
+      this._uiaCooldown = 2;
+      return { handled: false };
+    }
+    if (this.aborted) return { handled: true, result: 'Cancelled.' };
+    if (!snap || !snap.ok || !snap.elements || snap.elements.length === 0) {
+      if (snap && (snap.reason === 'timeout' || snap.reason === 'error')) this._uiaCooldown = 2;
+      return { handled: false };
     }
 
-    return `Stopped after ${maxSteps} steps.`;
+    if (snap.hwnd !== this._excludeHwnd) {
+      this._excludeKeys = new Set();
+      this._excludeHwnd = snap.hwnd;
+    }
+
+    // No-effect detection: same signature as the last Jev action means it did
+    // nothing visible — exclude that element next time and count it.
+    if (this._prevJev && snap.sig === this._prevJev.sig) {
+      const entry = this._history.find(h => h.step === this._prevJev.step && h.source === 'jev');
+      if (entry) entry.outcome = 'no_effect';
+      if (this._prevJev.key) this._excludeKeys.add(this._prevJev.key);
+      this._consecNoEffect++;
+    } else {
+      this._consecNoEffect = 0;
+    }
+    this._prevJev = null;
+
+    if (this._consecNoEffect >= 2) {
+      this._consecNoEffect = 0;
+      return { handled: false, reason: 'no_effect' };
+    }
+
+    let d;
+    try {
+      d = await withTimeout(api.jevDecide({
+        snapshotId: snap.snapshotId, goal,
+        history: this._history, excludeKeys: [...this._excludeKeys],
+        executedCount: this.executedCount,
+      }), 5000, 'jev-decide');
+    } catch {
+      d = { ok: false, error: 'timeout', status: null };
+    }
+    if (this.aborted) return { handled: true, result: 'Cancelled.' };
+
+    if (!d || !d.ok) {
+      this._jevErrors++;
+      const status = d && d.status;
+      if (status === 401 || status === 403 || this._jevErrors >= 2) {
+        if (!this._jevOff) this._log('jev: disabling after repeated errors');
+        this._jevOff = true;
+      }
+      return { handled: false };
+    }
+    this._jevErrors = 0;
+
+    if (d.kind === 'done') {
+      const descs = this._history.slice(-3).map(h => h.desc);
+      return { handled: true, result: `Done: ${descs.join('; ')}` };
+    }
+
+    if (d.kind === 'vision') {
+      this._consecFallbacks++;
+      this._jevSkip = Math.min(2, this._consecFallbacks - 1);
+      return { handled: false };
+    }
+
+    // d.kind === 'act'
+    this._consecFallbacks = 0;
+    this.onStep({ action: `uia_${d.op}`, args: { target: d.target, text: d.text, conf: d.conf } });
+
+    const el = d.elementId ? (snap.elements.find(e => e.id === d.elementId) || null) : null;
+    const key = el ? this._elementKeyLocal(el) : null;
+
+    if (this.aborted) return { handled: true, result: 'Cancelled.' };
+    let res;
+    try {
+      res = await withTimeout(api.uiaAct({
+        snapshotId: snap.snapshotId, elementId: d.elementId, op: d.op,
+        text: d.text, direction: d.direction, key: d.key,
+      }), d.op === 'type' ? 15000 : 8000, 'uia-act'); // type: main skips typing after 5s, SendKeys can take up to 8s more
+    } catch {
+      res = { ok: false, reason: 'timeout' };
+    }
+
+    if (res && ['stale_snapshot', 'stale_element', 'occluded', 'unsupported'].includes(res.reason)) {
+      return { handled: false };
+    }
+
+    let outcome;
+    if (res && res.ok) outcome = 'ok';
+    else if (res && res.reason === 'timeout') outcome = 'unknown';
+    else outcome = 'failed';
+
+    const desc = this._describeJevAction(d);
+    const stepNum = step + 1;
+    const entry = {
+      step: stepNum, source: 'jev', desc, outcome,
+      key: key || undefined, conf: d.conf, goal: d.goal,
+      ms: { uia: snap.ms, jev: d.ms, act: res && res.ms },
+    };
+    this._history.push(entry);
+    this._pendingForGemini.push(entry);
+    this._prevJev = { sig: snap.sig, key, step: stepNum };
+    this.executedCount++;
+    this._counters.jev++;
+
+    this._log(`⚡ ${desc} (${(d.conf || 0).toFixed(2)}) ${res && res.ms != null ? res.ms : '?'}ms`);
+    return { handled: true };
+  }
+
+  // ── Gemini vision step (original per-step body, unchanged apart from the
+  // Jev-history text injection right before the screenshot) ────────────────
+  async _visionStep({ apiKey, goal, contents, step, maxSteps, lastSummary }) {
+    this._log(`step ${step + 1}/${maxSteps}: capturing screen`);
+    // Capture clean screenshot (all Aura windows hidden by action mode).
+    // Bounded: this IPC hides windows and drives desktopCapturer, which can
+    // wedge — and an unbounded wait here strands the whole tool call.
+    const b64 = await withTimeout(
+      window.electronAPI.takeScreenshotClean(), TIMEOUTS.screenshot, 'screenshot');
+    if (!b64) throw new Error('Screenshot failed');
+
+    // Strip earlier screenshots — keep only the latest to control request size
+    for (const c of contents) {
+      if (c.parts) c.parts = c.parts.filter(p => !p.inlineData);
+    }
+
+    const screenshotParts = [];
+    // Let Gemini see what the fast Jev/UIA path already did since its last turn.
+    if (this._pendingForGemini.length) {
+      const lines = this._pendingForGemini.map((entry, i) => this._formatPendingLine(entry, i));
+      screenshotParts.push({
+        text: `Actions already performed by the fast element path since your last action:\n${lines.join('\n')}\nThe screenshot shows the result.`,
+      });
+      this._pendingForGemini = [];
+    }
+    screenshotParts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
+
+    contents.push({ role: 'user', parts: screenshotParts });
+
+    const body = {
+      systemInstruction: { parts: [{ text: CU_SYSTEM_PROMPT }] },
+      contents,
+      tools: this._buildTools(),
+      generationConfig: { thinkingConfig: { thinkingLevel: 'low' } },
+    };
+
+    this._log(`step ${step + 1}: requesting next action`);
+    const resp = await this._post(apiKey, body);
+    if (this.aborted) return { done: 'Cancelled.' };
+    const cand = resp.candidates?.[0];
+    const parts = cand?.content?.parts || [];
+    // Preserve the WHOLE part (including thoughtSignature) so we can echo it back
+    const fcPart = parts.find(p => p.functionCall);
+    const fc = fcPart?.functionCall;
+    const txt = parts.find(p => p.text)?.text;
+
+    if (txt) {
+      this.onLog(txt.slice(0, 160));
+      if (/^\s*DONE:/i.test(txt)) {
+        return { done: txt.replace(/^\s*DONE:\s*/i, '').slice(0, 200) };
+      }
+    }
+
+    if (!fc) {
+      return { done: txt || lastSummary || 'Stopped (no action returned).' };
+    }
+
+    const args = fc.args || {};
+
+    // Gemini 3.x may attach a safety_decision requiring human approval.
+    // User wants full autonomy — never halt or prompt, just proceed.
+    const safety = args.safety_decision;
+    if (safety && safety.decision === 'require_confirmation') {
+      this.onLog(`⚠ Safety flag ignored: ${safety.explanation || ''}`);
+    }
+
+    // Push the model's turn back into history — KEEP thoughtSignature
+    contents.push({ role: 'model', parts: [fcPart] });
+
+    if (args.intent) this._log(`· ${args.intent}`);
+    this.onStep({ action: fc.name, args });
+    let result;
+    try {
+      result = await withTimeout(
+        this._executeAction(fc.name, args), TIMEOUTS.action, `action ${fc.name}`);
+    } catch (e) {
+      // Report the failure to the model instead of aborting — it can adapt.
+      result = `failed: ${e.message}`;
+      this._log(`action ${fc.name} FAILED: ${e.message}`);
+    }
+    this._log(`step ${step + 1} done -> ${result}`);
+    const summary = `${fc.name}: ${result}`;
+
+    const response = { url: 'aura://desktop', output: result };
+    // The API rejects the NEXT request with a 400 unless a safety_decision
+    // that required confirmation is explicitly acknowledged here.
+    if (safety && safety.decision === 'require_confirmation') {
+      response.safety_acknowledgement = 'true';
+    }
+    contents.push({
+      role: 'user',
+      parts: [{
+        functionResponse: {
+          name: fc.name,
+          response,
+        },
+      }],
+    });
+
+    return { summary };
   }
 
   async _executeAction(name, args) {

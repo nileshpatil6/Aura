@@ -61,6 +61,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSystemInfo:   (type)        => ipcRenderer.invoke('get-system-info', type),
   computerAction:  (params)      => ipcRenderer.invoke('computer-action', params),
 
+  // Jev / UIA
+  jevStatus:   ()    => ipcRenderer.invoke('jev-status'),
+  uiaSnapshot: ()    => ipcRenderer.invoke('uia-snapshot'),
+  uiaAct:      (p)   => ipcRenderer.invoke('uia-act', p),
+  jevDecide:   (p)   => ipcRenderer.invoke('jev-decide', p),
+
   // Extended automation
   readClipboard:  ()      => ipcRenderer.invoke('read-clipboard'),
   writeClipboard: (t)     => ipcRenderer.invoke('write-clipboard', t),

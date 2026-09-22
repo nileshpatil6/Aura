@@ -453,7 +453,7 @@ document.getElementById('reset-all').onclick = async () => {
   await api.storeClear('activity');
   await api.storeClear('automations');
   await api.storeSet('memory', { name: '', notes: [] });
-  await api.storeSet('settings', { apiKey: '', voice: 'Aoede', hotkey: 'Alt+Space' });
+  await api.storeSet('settings', { apiKey: '', voice: 'Aoede', hotkey: 'Alt+Space', jevApiKey: '', jevEnabled: true });
   location.reload();
 };
 

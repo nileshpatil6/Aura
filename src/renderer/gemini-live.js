@@ -126,7 +126,7 @@ const TOOLS = [{
         properties: {
           goal: {
             type: 'STRING',
-            description: 'High-level goal in plain English. Examples: "Click the search bar in Chrome and type cats", "Open the file menu and click Save", "Scroll down to find the submit button and click it".',
+            description: 'High-level goal in plain English. Examples: "Click the search bar in Chrome and type cats", "Open the file menu and click Save", "Scroll down to find the submit button and click it". Put any exact text that must be typed in double quotes, e.g. Type "hello world" into Notepad.',
           },
         },
         required: ['goal'],
