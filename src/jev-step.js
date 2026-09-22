@@ -12,7 +12,7 @@ const THRESHOLDS = Object.freeze({
 
 // Jev-only mode has no vision fallback, so a hesitant-but-correct pick beats giving up.
 // Typed text is still verbatim from the task (I9), which keeps the lower bar safe.
-const JEV_ONLY_THRESHOLDS = Object.freeze({ ...THRESHOLDS, action: 0.6, typeAction: 0.55, text: 0.6 });
+const JEV_ONLY_THRESHOLDS = Object.freeze({ ...THRESHOLDS, action: 0.6, typeAction: 0.55, text: 0.6, goal: 0.8 });
 
 const LIMITS = Object.freeze({
   maxOptions: 255,      // Jev hard cap on choice options
@@ -197,6 +197,10 @@ function assembleState(snap, kept, goal, literals, excludeKeys, history) {
   criteria.key_enter = 'press Enter to submit or confirm';
   optionMap.key_escape = { kind: 'key', key: 'escape' };
   criteria.key_escape = 'press Escape to close or cancel';
+  if (/^(chrome|msedge|firefox|brave|opera)$/i.test(snap.process || '')) {
+    optionMap.key_ctrl_l = { kind: 'key', key: 'ctrl+l' };
+    criteria.key_ctrl_l = 'focus the browser address bar, the way to search the web or open a site';
+  }
   optionMap.scroll_down = { kind: 'scroll', direction: 'down' };
   criteria.scroll_down = 'scroll the window to reveal more content';
   optionMap.scroll_up = { kind: 'scroll', direction: 'up' };
@@ -335,7 +339,10 @@ function interpretJevAnswers(answers, built, ctx) {
     return { ok: true, kind: 'vision', reason: 'need_vision', ...base };
   }
 
-  // 5. Jev thinks done but goal noul disagrees
+  // 5. Jev thinks done but goal noul disagrees (Jev-only trusts a confident done pick)
+  if (choice === 'done' && ctx.jevOnly && conf >= 0.85 && goalVal >= 0.7 && ctx.executedCount >= 1) {
+    return { ok: true, kind: 'done', ...base };
+  }
   if (choice === 'done') {
     return { ok: true, kind: 'vision', reason: 'done_disagree', ...base };
   }

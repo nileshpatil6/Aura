@@ -360,6 +360,24 @@ class GeminiLive {
       if (extra.length) personalPrompt += '\n\n' + extra.join('\n\n');
     } catch {}
 
+    // Jev-only test mode: Gemini only turns speech into a task. It keeps open_application
+    // (Jev cannot launch apps) and do_computer_task; every other tool is withheld.
+    this._tools = TOOLS;
+    try {
+      const js = await window.electronAPI?.jevStatus?.();
+      if (js && js.enabled && js.jevOnly) {
+        const allowed = new Set(['open_application', 'do_computer_task']);
+        this._tools = TOOLS.map(t => t.functionDeclarations
+          ? { ...t, functionDeclarations: t.functionDeclarations.filter(f => allowed.has(f.name)) }
+          : t);
+        personalPrompt += '\n\nJEV-ONLY MODE (testing): you must not act on the computer yourself. For any on-screen request, '
+          + 'call open_application if an app must be launched, then do_computer_task with the user\'s request as the goal, '
+          + 'in their own words, with any text to type in double quotes. Do not plan steps, do not judge products, do not retry '
+          + 'with a rewritten goal. If do_computer_task reports it stopped, tell the user what it said and wait.';
+        this._log('jev-only: tools limited to', [...allowed]);
+      }
+    } catch {}
+
     console.log('[Aura] Opening WS to', WS_BASE);
     console.log('[Aura] Using model:', MODEL);
     const ws = new WebSocket(`${WS_BASE}?key=${apiKey}`);
@@ -397,7 +415,7 @@ class GeminiLive {
           systemInstruction: {
             parts: [{ text: personalPrompt }],
           },
-          tools: TOOLS,
+          tools: this._tools || TOOLS,
         },
       };
       console.log('[Aura] WS opened. Sending setup:', JSON.stringify(setupMsg).slice(0, 400) + '…');
@@ -530,6 +548,10 @@ class GeminiLive {
     const _t0 = Date.now();
     this._log(`tool START ${name}`, JSON.stringify(args).slice(0, 200));
     try {
+      if (this._tools && this._tools !== TOOLS &&
+          !this._tools.some(t => (t.functionDeclarations || []).some(f => f.name === name))) {
+        throw new Error(`${name} is disabled in Jev-only mode`);
+      }
       // Hard ceiling so no tool can strand the session. The individual awaits
       // inside are bounded too; this is the last line of defence for anything
       // unforeseen. Computer use legitimately runs longest, hence the split.
