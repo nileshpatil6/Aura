@@ -485,7 +485,13 @@ class GeminiLive {
         this._log('toolCall received', calls.map(c => c.name));
         this.callbacks.onStateChange('thinking');
         const t0 = Date.now();
-        await Promise.all(calls.map(call => this._dispatchTool(call)));
+        // Screen-driving tasks wait for the rest of the batch (e.g. open_application)
+        // plus a settle, or they read whatever window was in front before the app appeared.
+        const screenTasks = calls.filter(c => c.name === 'do_computer_task');
+        const others = calls.filter(c => c.name !== 'do_computer_task');
+        await Promise.all(others.map(call => this._dispatchTool(call)));
+        if (screenTasks.length && others.length) await new Promise(r => setTimeout(r, 1200));
+        for (const call of screenTasks) await this._dispatchTool(call);
         this._log(`all tool calls finished in ${Date.now() - t0}ms; awaiting model reply`,
           { pendingTools: [...this._pendingTools] });
       }

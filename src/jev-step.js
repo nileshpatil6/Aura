@@ -311,6 +311,9 @@ function interpretJevAnswers(answers, built, ctx) {
   const top2 = actionValid ? top2Of(action.probabilities) : [];
   const base = { choice, conf, goal: goalVal, stuck: stuckVal, top2 };
   const T = ctx && ctx.jevOnly ? JEV_ONLY_THRESHOLDS : THRESHOLDS;
+  // Jev-only: a clear winner counts even under the bar (top pick >= 0.45 and at least 2x the runner-up).
+  const clearWinner = !!(ctx && ctx.jevOnly) && conf >= 0.45 && top2.length === 2 && conf >= 2 * top2[1][1];
+  const below = (bar) => conf < bar && !clearWinner;
 
   // 1. bad answer shape / unknown choice
   if (!actionValid || !goalValid || !stuckValid || !(choice in built.optionMap)) {
@@ -341,7 +344,7 @@ function interpretJevAnswers(answers, built, ctx) {
 
   // 6. typing option
   if (opt.kind === 'type') {
-    if (conf < T.typeAction) {
+    if (below(T.typeAction)) {
       return { ok: true, kind: 'vision', reason: 'low_conf', ...base };
     }
 
@@ -379,7 +382,7 @@ function interpretJevAnswers(answers, built, ctx) {
   }
 
   // 7. any other choice below the action-confidence bar
-  if (conf < T.action) {
+  if (below(T.action)) {
     return { ok: true, kind: 'vision', reason: 'low_conf', ...base };
   }
 
