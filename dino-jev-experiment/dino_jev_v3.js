@@ -52,8 +52,8 @@ const CONFIG = {
   // 5000ms here: 5000ms of accumulated failures + a fixed 2000ms post-round drain + cleanup
   // overhead. Tightened to land closer to the coordinator's "~6s" verification target.
   freezeDetectMs: 3500,      // no game progress (distance/obstacle movement) or no successful snapshot for this long -> frozen
-  maxJevCallsPerRound: 600,
-  maxJevCallsPerProcess: 2500,
+  maxJevCallsPerRound: Number(process.env.DINO_CAP_ROUND) || 600,
+  maxJevCallsPerProcess: Number(process.env.DINO_CAP_PROCESS) || 2500,
 };
 
 function parseArgs() {
@@ -164,6 +164,9 @@ function createCdpTransport() {
       send = makeSender(ws);
       await send('Runtime.enable');
       await send('Page.enable');
+      // The Runner pauses itself on window blur; emulate focus so another window taking the
+      // foreground between rounds cannot freeze the game.
+      await send('Emulation.setFocusEmulationEnabled', { enabled: true });
       console.log(`[cdp] Navigating to ${GAME_URL} ...`);
       await send('Page.navigate', { url: GAME_URL });
       let ready = false;
