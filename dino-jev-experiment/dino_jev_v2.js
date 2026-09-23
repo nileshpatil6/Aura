@@ -24,6 +24,8 @@ const GAME_URL = 'https://chromedino.com/'; // see v1's dino_jev.js header for w
 const CONFIG = {
   pollIntervalMs: 16,       // fast execution-timing loop
   pipelineIntervalMs: 250,  // Jev planning cadence
+  pipelineIntervalFastMs: 100, // used when the nearest obstacle is close (hedges a slow reply)
+  pipelineFastThresholdMs: 800, // "close" = less than this many ms of travel time away
   maxInFlight: 3,
   jevTimeoutMs: 4000,
   maxObstaclesPerCall: 4,
@@ -121,11 +123,15 @@ const SNAPSHOT_EXPR = `
       xPos: o.xPos, yPos: o.yPos, width: o.width, size: o.size,
       height: o.typeConfig ? o.typeConfig.height : undefined,
       typeName: o.typeConfig ? o.typeConfig.type : undefined,
+      collisionBoxes: o.collisionBoxes || null,
     }));
     return {
       crashed: r.crashed, started: r.started, currentSpeed: r.currentSpeed, distanceRan: r.distanceRan,
       scoreStr: r.distanceMeter ? r.distanceMeter.digits.join('') : null,
-      tRex: { xPos: r.tRex.xPos, yPos: r.tRex.yPos, jumping: r.tRex.jumping, ducking: r.tRex.ducking },
+      tRex: {
+        xPos: r.tRex.xPos, yPos: r.tRex.yPos, jumping: r.tRex.jumping, ducking: r.tRex.ducking,
+        jumpVelocity: r.tRex.jumpVelocity,
+      },
       obstacles: obs,
     };
   })()
@@ -133,18 +139,59 @@ const SNAPSHOT_EXPR = `
 async function readSnapshot(send) { return evalJson(send, SNAPSHOT_EXPR); }
 async function readTRexConfig(send) { return evalJson(send, `Runner.instance_.tRex.config`); }
 
-// ---- physics helpers (same formulas v1 calibrated) ----------------------------
-// See v1 dino_jev.js for the derivation notes (fixed MIN==MAX_JUMP_HEIGHT apex, width-centered
-// margin). Reused verbatim here since the underlying game physics are identical.
-function computeJumpWindow(speed, tRexConfig, obstacleWidthPx) {
+// ---- physics helpers ------------------------------------------------------------------------
+const FRAME_MS = 1000 / 60; // GRAVITY/INIITAL_JUMP_VELOCITY are per-frame units calibrated at 60fps
+
+// Tight bounding box of the obstacle's actual collision boxes (verified structure: array of
+// {x,y,width,height} offsets relative to the sprite), instead of the full sprite width, which can
+// include transparent padding. Falls back to the sprite width when collisionBoxes is unavailable.
+function collisionWidthOf(o) {
+  if (!o.collisionBoxes || !o.collisionBoxes.length) return o.width;
+  let minX = Infinity, maxX = -Infinity;
+  for (const b of o.collisionBoxes) { minX = Math.min(minX, b.x); maxX = Math.max(maxX, b.x + b.width); }
+  return Math.max(1, maxX - minX);
+}
+
+// FIRST attempt at v3 tried simulating the jump arc frame-by-frame from tRexConfig's raw
+// GRAVITY/INIITAL_JUMP_VELOCITY (y += v; v += GRAVITY per 16.67ms "frame"). That produced ~330ms
+// flights and scored WORSE (51/46/46) than v2's baseline (733/832) -- jumping far too early.
+// Direct measurement (monkey-patching tRex.update to log every real physics tick, then a clean
+// passive rAF trace as a cross-check -- see the removed probe_jump*.js) showed the real flight is
+// only ~128ms end to end at speed ~6.06, and the y/velocity integration does NOT match a simple
+// fixed-frame model (this clone applies most of the vertical displacement in the first couple of
+// real ms after the key press, then a much shallower tail back to the ground -- not a textbook
+// parabola). Rather than chase an exact closed-form model of a quirky implementation, this uses
+// the MEASURED total flight duration directly, scaled by the same speed-adjustment factor the
+// game itself applies to jumpVelocity (v0 = INIITAL_JUMP_VELOCITY - speed/10), and computeJumpWindow
+// keeps the ORIGINAL h=MAX_JUMP_HEIGHT-derived window formula, which was empirically validated
+// across 8+ calibration rounds (v2's 733/832 scores) and is a trigger-window heuristic, not a
+// literal physics claim -- changing its numbers without re-validating regressed hard, so it is
+// left as-is other than taking collision width and the next-obstacle lookahead as inputs.
+const MEASURED_FLIGHT_MS = 128;
+const MEASURED_FLIGHT_SPEED = 6.06;
+function estimateJumpFlightMs(speed, tRexConfig) {
+  const v0 = Math.abs(tRexConfig.INIITAL_JUMP_VELOCITY - speed / 10);
+  const v0Ref = Math.abs(tRexConfig.INIITAL_JUMP_VELOCITY - MEASURED_FLIGHT_SPEED / 10);
+  return MEASURED_FLIGHT_MS * (v0 / v0Ref);
+}
+
+// `nextTriggerMs`: ms until the FOLLOWING obstacle's own trigger point, if known (second-obstacle
+// lookahead). When a full jump cycle wouldn't leave any slack before that point, front-load the
+// window -- bias `high` down toward `low` so the jump happens as early as the window allows,
+// maximizing slack before the next obstacle's own deadline.
+function computeJumpWindow(speed, tRexConfig, obstacleWidthPx, nextTriggerMs) {
   const h = tRexConfig.MAX_JUMP_HEIGHT;
   const g = tRexConfig.GRAVITY;
   const flightFrames = 2 * Math.sqrt((2 * h) / g);
   const flightPx = speed * flightFrames;
+  const flightMs = flightFrames * FRAME_MS;
   const overlapPx = (obstacleWidthPx || 20) + tRexConfig.WIDTH;
   const marginPx = Math.max(0, (flightPx - overlapPx) / 2);
-  const high = Math.max(CONFIG.jumpWindowLowPx + 5, Math.round(marginPx));
-  return { low: CONFIG.jumpWindowLowPx, high, flightPx: Math.round(flightPx), overlapPx: Math.round(overlapPx) };
+  let high = Math.max(CONFIG.jumpWindowLowPx + 5, Math.round(marginPx));
+  if (nextTriggerMs !== null && nextTriggerMs !== undefined && flightMs > nextTriggerMs) {
+    high = CONFIG.jumpWindowLowPx + 5; // no slack left: jump the instant the window opens
+  }
+  return { low: CONFIG.jumpWindowLowPx, high, flightPx: Math.round(flightPx), flightMs: Math.round(flightMs), overlapPx: Math.round(overlapPx) };
 }
 // Ducking has no flight arc: start holding down shortly before the bird's front edge arrives,
 // release once its trailing edge has cleared the dino's front edge.
@@ -263,24 +310,6 @@ async function runRound(send, tRexConfig, groundY, key, roundIndex, logDir) {
   const logStream = fs.createWriteStream(logPath, { flags: 'w' });
   const tracker = makeTracker(tRexConfig, groundY);
 
-  let totalInputTokensWarmup = 0;
-  // Calibration round 1 died 'unplanned' on the very first obstacle: pipelineTick only fires once
-  // an obstacle exists, so the FIRST Jev call of the round ate the ~2s cold-start latency exactly
-  // when the timing mattered. Pay that cost here, before any obstacle exists (v1 never had this bug
-  // because its pipeline fired unconditionally every 130ms from the start, incidentally warming up
-  // the connection). Not counted in decision-latency stats; its token cost still is.
-  {
-    const warmStart = Date.now();
-    const res = await jevCall({
-      key, state: 'Connection warm-up, not a real game state. Just answer yes.',
-      questions: { warm: { type: 'noul', instructions: 'Answer yes.' } },
-      timeoutMs: CONFIG.jevTimeoutMs,
-    });
-    const warmLatencyMs = Date.now() - warmStart;
-    if (res.ok) totalInputTokensWarmup = (res.usage && res.usage.input_tokens) || 0;
-    logStream.write(JSON.stringify({ t: Date.now(), kind: 'warmup', latencyMs: warmLatencyMs, ok: res.ok }) + '\n');
-  }
-
   let latestSnapshot = null;
   let runActive = true;
   let requestSeq = 0;
@@ -290,6 +319,7 @@ async function runRound(send, tRexConfig, groundY, key, roundIndex, logDir) {
   let totalInputTokens = 0;
   let duckActiveId = null;       // obstacle id currently holding the duck key
   let fastDropForId = null;      // obstacle id waiting for a fast-drop landing before its jump
+  let currentJumpStartedTs = null; // Date.now() of the most recent pressSpace, for elapsed-time tracking
   let unplannedCount = 0;
   let crashInfo = null;
 
@@ -382,32 +412,57 @@ async function runRound(send, tRexConfig, groundY, key, roundIndex, logDir) {
       const held = tracker.active.find((o) => o.id === duckActiveId) || tracker.history.find((o) => o.id === duckActiveId);
       if (held) {
         const gap = held.xPos !== undefined ? gapFor(snap, held) : -9999;
-        const dw = computeDuckWindow(tRexConfig, held.width);
+        const dw = computeDuckWindow(tRexConfig, collisionWidthOf(held));
         if (gap < dw.releaseAt) { await setDuck(send, false); duckActiveId = null; }
       } else {
         await setDuck(send, false); duckActiveId = null;
       }
     }
 
-    // finish a pending fast-drop once landed, then jump for the obstacle that requested it
+    // Finish a pending fast-drop once landed, then execute whatever THAT obstacle's plan actually
+    // says (jump or duck -- the old version assumed jump unconditionally, which was wrong whenever
+    // the obstacle needing us grounded was a mid-height bird instead of a cactus).
     if (fastDropForId && !snap.tRex.jumping) {
-      await setDuck(send, false);
       const obstacle = tracker.active.find((o) => o.id === fastDropForId);
       fastDropForId = null;
       if (obstacle && !obstacle.executed) {
-        await pressSpace(send);
+        const c = obstacle.plan ? obstacle.plan.choice : 'jump';
+        if (c === 'duck') {
+          duckActiveId = obstacle.id; // ArrowDown is already held from the fast-drop; keep holding
+        } else {
+          await setDuck(send, false); // release the fast-drop hold before jumping
+          await pressSpace(send);
+          currentJumpStartedTs = Date.now();
+        }
         obstacle.executed = true;
         obstacle.executedAtGap = Math.round(gapFor(snap, obstacle));
         obstacle.executedAtTs = Date.now();
-        logEvent({ kind: 'execute', id: obstacle.id, action: 'jump', note: 'post-fast-drop', gap: obstacle.executedAtGap });
+        logEvent({ kind: 'execute', id: obstacle.id, action: c, note: 'post-fast-drop', gap: obstacle.executedAtGap });
+      } else {
+        await setDuck(send, false);
       }
     }
 
     const nearest = tracker.active.find((o) => !o.executed);
     if (!nearest) return;
     const gap = gapFor(snap, nearest);
-    const jw = computeJumpWindow(snap.currentSpeed, tRexConfig, nearest.width);
-    const dw = computeDuckWindow(tRexConfig, nearest.width);
+    const nearestWidth = collisionWidthOf(nearest);
+
+    // Second-obstacle lookahead: estimate ms until the FOLLOWING obstacle's own trigger point, so
+    // computeJumpWindow can front-load this obstacle's jump if there's no slack before the next one.
+    const next = tracker.active.find((o) => o !== nearest && !o.executed);
+    let nextTriggerMs = null;
+    if (next) {
+      const nextGap = gapFor(snap, next);
+      const nextWidth = collisionWidthOf(next);
+      const nextJw = computeJumpWindow(snap.currentSpeed, tRexConfig, nextWidth, null);
+      const nextTriggerGapPx = next.obsClass === 'bird-mid' ? computeDuckWindow(tRexConfig, nextWidth).start : nextJw.high;
+      const pxPerMs = pxPerMsFor(snap.currentSpeed);
+      nextTriggerMs = Math.max(0, (nextGap - nextTriggerGapPx) / Math.max(pxPerMs, 0.01));
+    }
+
+    const jw = computeJumpWindow(snap.currentSpeed, tRexConfig, nearestWidth, nextTriggerMs);
+    const dw = computeDuckWindow(tRexConfig, nearestWidth);
     const triggerHigh = nearest.obsClass === 'bird-mid' ? dw.start : jw.high;
 
     if (nearest.triggerReachedTs === null && gap <= triggerHigh) nearest.triggerReachedTs = Date.now();
@@ -422,26 +477,45 @@ async function runRound(send, tRexConfig, groundY, key, roundIndex, logDir) {
     }
 
     const choice = nearest.plan.choice;
+    const needsGrounded = choice === 'jump' || choice === 'duck';
+
+    // PROACTIVE fast-drop: if airborne from a previous obstacle and this one needs us grounded,
+    // estimate remaining airborne time from ACTUAL elapsed time since we pressed the key (tracked
+    // in currentJumpStartedTs) against the measured real flight duration -- not a flat guess
+    // applied regardless of how far into the jump we already are. (A from-scratch per-frame
+    // simulation from tRexConfig's raw GRAVITY/velocity constants was tried first and produced
+    // flight estimates 2-3x too long, causing far-too-early jumps; see the comment above
+    // computeJumpWindow.) If we won't land in time, cut the current jump short now instead of
+    // waiting for the window to open (which can already be too late).
+    if (needsGrounded && snap.tRex.jumping && fastDropForId !== nearest.id) {
+      const elapsedMs = currentJumpStartedTs ? Date.now() - currentJumpStartedTs : 0;
+      const landingMs = Math.max(0, estimateJumpFlightMs(snap.currentSpeed, tRexConfig) - elapsedMs);
+      const pxPerMs = pxPerMsFor(snap.currentSpeed);
+      const msUntilTrigger = Math.max(0, (gap - triggerHigh) / Math.max(pxPerMs, 0.01));
+      if (landingMs > msUntilTrigger) {
+        fastDropForId = nearest.id;
+        await setDuck(send, true);
+        logEvent({
+          kind: 'fast_drop_start', id: nearest.id, gap: Math.round(gap),
+          landingMs: Math.round(landingMs), msUntilTrigger: Math.round(msUntilTrigger),
+        });
+      }
+      return;
+    }
+
     if (choice === 'jump') {
       if (gap > jw.high) return; // not time yet
-      if (snap.tRex.jumping) {
-        // back-to-back: still airborne from a previous obstacle. Fast-drop (ArrowDown while
-        // airborne triggers the game's speedDrop / DROP_VELOCITY) to land early, then jump.
-        if (fastDropForId !== nearest.id) {
-          fastDropForId = nearest.id;
-          await setDuck(send, true);
-          logEvent({ kind: 'fast_drop_start', id: nearest.id, gap: Math.round(gap) });
-        }
-        return;
-      }
+      if (snap.tRex.jumping) return; // still resolving a fast-drop from the tick above
       await pressSpace(send);
+      currentJumpStartedTs = Date.now();
       nearest.executed = true;
       nearest.executedAtGap = Math.round(gap);
       nearest.executedAtTs = Date.now();
       logEvent({ kind: 'execute', id: nearest.id, action: 'jump', gap: nearest.executedAtGap, confidence: nearest.plan.confidence });
     } else if (choice === 'duck') {
       if (gap > dw.start) return;
-      if (!snap.tRex.jumping && duckActiveId !== nearest.id) {
+      if (snap.tRex.jumping) return;
+      if (duckActiveId !== nearest.id) {
         await setDuck(send, true);
         duckActiveId = nearest.id;
         nearest.executed = true;
@@ -496,13 +570,30 @@ async function runRound(send, tRexConfig, groundY, key, roundIndex, logDir) {
       pollBusy = false;
     }
   }, CONFIG.pollIntervalMs);
-  const pipelineTimer = setInterval(() => pipelineTick().catch(() => {}), CONFIG.pipelineIntervalMs);
+  // Adaptive pipeline cadence: "keep the plan cache fresh" by continuing to re-query every
+  // obstacle until it's executed (pipelineTick's candidate filter already does that), AND hedge
+  // against one slow individual reply by firing MORE often (more independent latency draws) once
+  // the nearest unexecuted obstacle is getting close, instead of a single fixed 250ms cadence.
+  let pipelineTimerHandle = null;
+  function schedulePipeline() {
+    if (!runActive) return;
+    let delay = CONFIG.pipelineIntervalMs;
+    const nearestForCadence = tracker.active.find((o) => !o.executed);
+    if (nearestForCadence && latestSnapshot) {
+      const gap = gapFor(latestSnapshot, nearestForCadence);
+      const pxPerMs = pxPerMsFor(latestSnapshot.currentSpeed);
+      const msToArrival = gap / Math.max(pxPerMs, 0.01);
+      if (msToArrival < CONFIG.pipelineFastThresholdMs) delay = CONFIG.pipelineIntervalFastMs;
+    }
+    pipelineTimerHandle = setTimeout(() => { pipelineTick().catch(() => {}); schedulePipeline(); }, delay);
+  }
+  schedulePipeline();
 
   const startTime = Date.now();
   while (runActive) await new Promise((r) => setTimeout(r, 30));
   const durationMs = Date.now() - startTime;
   clearInterval(pollTimer);
-  clearInterval(pipelineTimer);
+  clearTimeout(pipelineTimerHandle);
   const drainDeadline = Date.now() + 2000;
   while (inFlight > 0 && Date.now() < drainDeadline) await new Promise((r) => setTimeout(r, 50));
   logStream.end();
@@ -528,12 +619,10 @@ async function runRound(send, tRexConfig, groundY, key, roundIndex, logDir) {
   latencies.sort((a, b) => a - b);
   const pct = (p) => (latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * p))] : 0);
   const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
-  const totalInputTokensAll = totalInputTokens + totalInputTokensWarmup;
-
   return {
-    round: roundIndex, score: finalScore, durationMs, jevCallCount: jevCallCount + 1 /* +warmup */,
+    round: roundIndex, score: finalScore, durationMs, jevCallCount,
     avgLatency, p50: pct(0.5), p90: pct(0.9),
-    totalInputTokens: totalInputTokensAll, cost: totalInputTokensAll * CONFIG.costPerInputToken,
+    totalInputTokens, cost: totalInputTokens * CONFIG.costPerInputToken,
     obstacleCount: allObstacles.length, unplannedCount,
     plannedBeforeArrivalPct: everReachedTrigger.length ? Math.round((100 * plannedBeforeArrival.length) / everReachedTrigger.length) : null,
     avgLeadTimeMs: avgLeadTimeMs === null ? null : Math.round(avgLeadTimeMs),
@@ -574,16 +663,39 @@ async function main() {
     const groundY = await evalJson(send, `Runner.instance_.tRex.yPos`);
     console.log('tRex config:', tRexConfig, 'groundY:', groundY);
 
+    // Warm up the Jev connection ONCE, here -- before Space is ever pressed, so the game clock
+    // isn't already running while we eat the ~2s cold-start latency. The original per-round
+    // placement (after Space, before polling started) left the game ticking unmonitored during
+    // warm-up; round 3 of one calibration run died 'unplanned' within 215ms because an obstacle
+    // had already closed to a fatal gap before the first poll ever ran.
+    let warmupTokens = 0;
+    {
+      const warmStart = Date.now();
+      const res = await jevCall({
+        key, state: 'Connection warm-up, not a real game state. Just answer yes.',
+        questions: { warm: { type: 'noul', instructions: 'Answer yes.' } },
+        timeoutMs: CONFIG.jevTimeoutMs,
+      });
+      if (res.ok) warmupTokens = (res.usage && res.usage.input_tokens) || 0;
+      console.log(`Warm-up call: ${Date.now() - warmStart}ms, ok=${res.ok}`);
+    }
+
     const results = [];
     for (let i = 1; i <= RUNS; i++) {
       console.log(`\n=== Round ${i}/${RUNS}: pressing Space to start ===`);
       await send('Page.bringToFront');
       let started = false;
-      for (let j = 0; j < 20 && !started; j++) {
-        await pressSpace(send);
-        await new Promise((r) => setTimeout(r, 500));
+      // Poll for `started` at the same fast cadence runRound uses (not every 500ms): the game
+      // clock is already running once Space registers, unmonitored, so a slow start-detection
+      // loop here is the same "blind window" bug the warm-up relocation fixed, just smaller.
+      // One round in calibration died in 215ms because an obstacle had already closed to a
+      // near-fatal gap before polling ever began.
+      await pressSpace(send);
+      for (let j = 0; j < 100 && !started; j++) {
+        await new Promise((r) => setTimeout(r, CONFIG.pollIntervalMs));
         const snap = await readSnapshot(send);
         if (snap.started && !snap.crashed) started = true;
+        else if (j % 20 === 19) await pressSpace(send); // retry in case the first tap was missed
       }
       if (!started) throw new Error(`Round ${i}: game never started`);
 
@@ -596,11 +708,18 @@ async function main() {
         plannedBeforeArrivalPct: result.plannedBeforeArrivalPct, avgLeadTimeMs: result.avgLeadTimeMs,
         deathCause: result.deathCause, cost: result.cost.toFixed(6),
       });
-      await new Promise((r) => setTimeout(r, 1000));
+      // Scale the inter-round cooldown to how many calls the round just made: two calibration
+      // rounds in a row measured a uniform ~1700-1900ms latency (vs. the usual ~350ms) immediately
+      // after a 600-call, 114s round, with only 3 calls total before an 'unplanned' death -- looks
+      // like transient server-side or connection-pool slowdown from sustained high call volume,
+      // not our code. A longer cooldown after a heavy round is a cheap hedge; a short round still
+      // only waits the original 1s.
+      const cooldownMs = 1000 + Math.min(4000, result.jevCallCount * 5);
+      await new Promise((r) => setTimeout(r, cooldownMs));
     }
 
     console.log('\n================ SUMMARY (v2, lookahead planning) ================');
-    let totalCalls = 0, totalCost = 0, bestScore = -1, bestRound = null;
+    let totalCalls = 1, totalCost = warmupTokens * CONFIG.costPerInputToken, bestScore = -1, bestRound = null;
     for (const r of results) {
       totalCalls += r.jevCallCount;
       totalCost += r.cost;

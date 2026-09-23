@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Jev Dino Bridge (local experiment)",
+  "version": "1.0.0",
+  "description": "Local-only bridge for the Jev dino experiment. Reads chromedino.com's game state and executes jump/duck decisions made by a local Node script over ws://127.0.0.1. No data leaves this machine except the Node script's own Jev API calls.",
+  "host_permissions": ["https://chromedino.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://chromedino.com/*"],
+      "js": ["page-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://chromedino.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
