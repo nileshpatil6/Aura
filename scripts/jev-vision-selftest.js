@@ -632,6 +632,235 @@ check('automation.buildTypeScript: single-pass SendKeys escaping', () => {
   assert.ok(build('x').includes('catch'));
 });
 
+check('readVisionConfig: planner hedge / capture / warmup defaults and overrides', () => {
+  const c = readVisionConfig({});
+  assert.equal(c.plannerTimeoutMs, 12000);
+  assert.equal(c.plannerHedgeMs, 2500);
+  assert.equal(c.plannerMaxRequests, 3);
+  assert.equal(c.plannerThinking, 'low');
+  assert.equal(c.fastCapture, true);
+  assert.equal(c.warmup, true);
+  const o = readVisionConfig({ AURA_PLANNER_HEDGE_MS: '900', AURA_PLANNER_THINKING: 'minimal', AURA_PLANNER_MAX_REQUESTS: '9',
+    AURA_JV_FAST_CAPTURE: '0', AURA_JV_WARMUP: '0', AURA_PLANNER_MAX_TOKENS: 'abc' });
+  assert.equal(o.plannerHedgeMs, 900);
+  assert.equal(o.plannerThinking, 'minimal');
+  assert.equal(o.plannerMaxRequests, 3);
+  assert.equal(o.fastCapture, false);
+  assert.equal(o.warmup, false);
+  assert.equal(o.plannerMaxTokens, 2048);
+  assert.equal(readVisionConfig({ AURA_PLANNER_THINKING: 'bogus' }).plannerThinking, 'low');
+});
+
+check('validatePlan: open_url accepts http(s) only and is never risky', () => {
+  const ok = validatePlan({ steps: [{ op: 'open_url', url: ' https://www.google.com/search?q=best phone under 50k ', risky: true, done_when: 'results' }] });
+  assert.equal(ok.ok, true);
+  const st = ok.plan.steps[0];
+  assert.equal(st.url, 'https://www.google.com/search?q=best%20phone%20under%2050k');
+  assert.equal(st.risky, undefined);
+  for (const bad of ['javascript:alert(1)', 'file:///c:/windows/win.ini', 'ftp://x.com/a', '', 'not a url', 'https://user:pw@evil.com/', 'https://' + 'a'.repeat(2100) + '.com']) {
+    const r = validatePlan({ steps: [{ op: 'open_url', url: bad }] });
+    assert.equal(r.ok, false, bad.slice(0, 30));
+    assert.ok(/step 1/.test(r.error));
+  }
+  assert.equal(validatePlan({ steps: [{ op: 'open_url' }] }).ok, false);
+  assert.equal(isConsequential({ op: 'open_url', url: 'https://x.com/delete-account' }), false);
+  assert.equal(describeStep({ op: 'open_url', url: 'https://www.google.com/search?q=a' }), 'open www.google.com');
+});
+
+// ── planner hedging with a fake fetch ───────────────────────────────────────
+const { hedgedPlan } = require(path.join(__dirname, '..', 'src', 'jev-planner.js'));
+
+function geminiBody(planObj) { return { candidates: [{ content: { parts: [{ text: typeof planObj === 'string' ? planObj : JSON.stringify(planObj) }] } }] }; }
+const GOOD_PLAN = { steps: [{ op: 'open_app', app: 'notepad', done_when: '' }] };
+
+// script: array of { delay, status?, body } consumed in call order; the last entry repeats.
+function fakeFetch(script) {
+  const log = { calls: 0, aborted: 0 };
+  const fn = (url, init) => {
+    const i = Math.min(log.calls, script.length - 1);
+    log.calls++;
+    const s = script[i];
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const status = s.status || 200;
+        resolve({ ok: status >= 200 && status < 300, status, json: async () => s.body });
+      }, s.delay || 0);
+      init.signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        log.aborted++;
+        const e = new Error('aborted'); e.name = 'AbortError'; reject(e);
+      });
+    });
+  };
+  return { fn, log };
+}
+const hedgeBase = { key: 'k', userText: 'TASK: x', source: 'gemini', model: 'm' };
+
+check('hedgedPlan: slow first request is beaten by the hedge, loser aborted', async () => {
+  const f = fakeFetch([{ delay: 600, body: geminiBody(GOOD_PLAN) }, { delay: 10, body: geminiBody(GOOD_PLAN) }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 40, fetchFn: f.fn });
+  assert.equal(r.ok, true);
+  assert.equal(r.requests, 2);
+  assert.ok(r.ms < 400, `took ${r.ms}`);
+  assert.equal(f.log.aborted, 1);
+  assert.equal(r.plan.source, 'gemini');
+});
+
+check('hedgedPlan: invalid JSON triggers an immediate replacement (before the hedge delay)', async () => {
+  const f = fakeFetch([{ delay: 5, body: geminiBody('{not json') }, { delay: 5, body: geminiBody(GOOD_PLAN) }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 5000, fetchFn: f.fn });
+  assert.equal(r.ok, true);
+  assert.equal(r.requests, 2);
+  assert.ok(r.ms < 1000);
+});
+
+check('hedgedPlan: invalid plan (bad op) also replaces; max 3 requests then fails', async () => {
+  const f = fakeFetch([{ delay: 5, body: geminiBody({ steps: [{ op: 'launch_rocket' }] }) }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 5000, fetchFn: f.fn });
+  assert.equal(r.ok, false);
+  assert.equal(r.requests, 3);
+  assert.equal(f.log.calls, 3);
+  assert.ok(/bad op/.test(r.error));
+});
+
+check('hedgedPlan: a final 4xx ends immediately with one request', async () => {
+  const f = fakeFetch([{ delay: 5, status: 400, body: { error: { message: 'bad request' } } }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 5000, fetchFn: f.fn });
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 400);
+  assert.equal(r.requests, 1);
+});
+
+check('hedgedPlan: 429 and 5xx are retried; the 429 replacement waits out the back-off', async () => {
+  const f = fakeFetch([{ delay: 5, status: 429, body: {} }, { delay: 5, status: 503, body: {} }, { delay: 5, body: geminiBody(GOOD_PLAN) }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 5000, retryAfter429Ms: 150, fetchFn: f.fn });
+  assert.equal(r.ok, true);
+  assert.equal(r.requests, 3);
+  assert.ok(r.ms >= 140, `429 retry fired too early: ${r.ms}`);
+  // a 5xx replacement is immediate
+  const g = fakeFetch([{ delay: 5, status: 503, body: {} }, { delay: 5, body: geminiBody(GOOD_PLAN) }]);
+  const r2 = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 5000, retryAfter429Ms: 500, fetchFn: g.fn });
+  assert.equal(r2.ok, true);
+  assert.ok(r2.ms < 300, `5xx retry was delayed: ${r2.ms}`);
+});
+
+check('hedgedPlan: 429 back-off is capped by the remaining budget and still finishes', async () => {
+  const f = fakeFetch([{ delay: 5, status: 429, body: {} }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 700, hedgeMs: 5000, retryAfter429Ms: 5000, fetchFn: f.fn });
+  assert.equal(r.ok, false);
+  assert.ok(r.ms < 1500, `took ${r.ms}`);
+  assert.ok(r.requests >= 1 && r.requests <= 3);
+});
+
+check('hedgedPlan: overall budget aborts every request and reports timeout', async () => {
+  const f = fakeFetch([{ delay: 5000, body: geminiBody(GOOD_PLAN) }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 200, hedgeMs: 50, fetchFn: f.fn });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'timeout');
+  assert.ok(r.ms < 1000);
+  assert.equal(f.log.aborted, f.log.calls);
+});
+
+check('hedgedPlan: maxRequests 1 never hedges; external abort cancels', async () => {
+  const f = fakeFetch([{ delay: 150, body: geminiBody(GOOD_PLAN) }]);
+  const r = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 10, maxRequests: 1, fetchFn: f.fn });
+  assert.equal(r.ok, true);
+  assert.equal(f.log.calls, 1);
+  const g = fakeFetch([{ delay: 5000, body: geminiBody(GOOD_PLAN) }]);
+  const ctl = new AbortController();
+  setTimeout(() => ctl.abort(), 30);
+  const r2 = await hedgedPlan({ ...hedgeBase, timeoutMs: 3000, hedgeMs: 5000, signal: ctl.signal, fetchFn: g.fn });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.error, 'aborted');
+  assert.equal(g.log.aborted, 1);
+});
+
+check('runner: open_url step opens the url once through deps.openUrl; failure -> error', async () => {
+  const opened = [];
+  const plan = planResult([{ op: 'open_url', url: 'https://www.google.com/search?q=phone', done_when: '' }]);
+  const h = harness({
+    cfg: { uia: false }, plan,
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.9) } : {}),
+    overrides: { openUrl: async (u) => { opened.push(u); return { success: true }; } },
+  });
+  const r = await runVisionTask('search for phones then stop', h.deps, h.cfg);
+  assert.equal(r.status, 'done');
+  assert.deepEqual(opened, ['https://www.google.com/search?q=phone']);
+  assert.equal(h.calls.confirm, 0);
+  const bad = harness({ cfg: { uia: false }, plan, overrides: { openUrl: async () => ({ success: false }) } });
+  assert.equal((await runVisionTask('search for phones then stop', bad.deps, bad.cfg)).status, 'error');
+});
+
+check('automation app index: parse Get-StartApps lines and look names up', () => {
+  const Module = require('module');
+  const orig = Module._load;
+  Module._load = function (req, ...rest) { return req === 'electron' ? { Notification: class {} } : orig.call(this, req, ...rest); };
+  let auto;
+  try { auto = require(path.join(__dirname, '..', 'src', 'automation.js')); } finally { Module._load = orig; }
+  const entries = auto.parseAppIndex([
+    'WhatsApp||5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App',
+    'Google Chrome||Chrome',
+    'Chrome Remote Desktop||Chrome.RemoteDesktop',
+    'Notepad||Microsoft.WindowsNotepad_8wekyb3d8bbwe!App',
+    'Notepad++||{6D809377-6AF0-444B-8957-A3773F02200E}\\Notepad++\\notepad++.exe',
+    'Uninstall Notepad++||{6D809377-6AF0-444B-8957-A3773F02200E}\\Notepad++\\uninstall.exe',
+    'Evil||C:\\Windows\\evil.exe',
+    'Quote||bad"id',
+    'no separator line',
+  ].join('\r\n'));
+  assert.equal(entries.length, 6); // path ids, quotes and junk lines are dropped
+  const hit = (q) => { const e = auto.lookupAppEntry(entries, q); return e && e.name; };
+  assert.equal(hit('whatsapp'), 'WhatsApp');
+  assert.equal(hit('WhatsApp '), 'WhatsApp');
+  assert.equal(hit('chrome'), 'Google Chrome');
+  assert.equal(hit('notepad'), 'Notepad');
+  assert.equal(hit('the notepad'), 'Notepad');
+  assert.equal(hit('uninstall notepad'), 'Uninstall Notepad++');
+  assert.equal(hit('nonexistent app'), null);
+  assert.equal(hit('x'), null);
+  assert.equal(auto.lookupAppEntry(null, 'notepad'), null);
+});
+
+check('app index: failed or empty builds are not retried before the refresh interval', async () => {
+  const Module = require('module');
+  const orig = Module._load;
+  Module._load = function (req, ...rest) { return req === 'electron' ? { Notification: class {} } : orig.call(this, req, ...rest); };
+  let auto;
+  try { auto = require(path.join(__dirname, '..', 'src', 'automation.js')); } finally { Module._load = orig; }
+  const t = auto.__appIndexTest;
+  let builds = 0;
+  let out = '';
+  t.setRunner(async () => { builds++; return { success: true, output: out }; });
+  t.reset();
+  // before any build exists, a lookup returns null at once and never builds
+  assert.equal(await t.find('notepad'), null);
+  assert.equal(builds, 0);
+  // empty result: one attempt, then no retry on warm or on lookups
+  out = '';
+  auto.warmAppIndex(); await t.wait();
+  assert.equal(builds, 1);
+  auto.warmAppIndex(); await t.wait();
+  assert.equal(await t.find('notepad'), null);
+  assert.equal(builds, 1);
+  // a thrown runner is also recorded as an attempt
+  t.reset();
+  t.setRunner(async () => { builds++; throw new Error('boom'); });
+  builds = 0;
+  auto.warmAppIndex(); await t.wait();
+  auto.warmAppIndex(); await t.wait();
+  assert.equal(builds, 1);
+  // success: index used, a miss inside the interval does not rebuild
+  t.reset();
+  builds = 0;
+  t.setRunner(async () => { builds++; return { success: true, output: 'Notepad||Microsoft.WindowsNotepad_8wekyb3d8bbwe!App' }; });
+  auto.warmAppIndex(); await t.wait();
+  assert.equal((await t.find('notepad')).name, 'Notepad');
+  assert.equal(await t.find('nothing here'), null);
+  assert.equal(builds, 1);
+  t.setRunner(async () => ({ success: true, output: '' }));
+  t.reset();
+});
+
 check('sanitizeText: removes backticks and SCREEN_REF, collapses, caps', () => {
   assert.equal(sanitizeText(`a \`b\` ${SCREEN_REF} c`), 'a b c');
   assert.equal(sanitizeText('x'.repeat(300), 10).length, 10);

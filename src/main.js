@@ -10,7 +10,7 @@ const { buildJevRequest, interpretJevAnswers, snapshotSignature } = require('./j
 const { resolveJevKey, resolveGeminiKey } = require('./env-keys');
 const { runVisionTask } = require('./jev-vision-runner');
 const { planTask, replanTask } = require('./jev-planner');
-const { primaryDisplayInfo, capturePrimaryJpeg } = require('./screen-capture');
+const { primaryDisplayInfo, capturePrimaryJpeg, warmCapture, setCaptureLogger } = require('./screen-capture');
 const { readVisionConfig } = require('./jev-vision');
 
 let mainWindow = null;
@@ -527,6 +527,8 @@ app.whenReady().then(() => {
   debugLog(`jev key source=${cfg.source || 'none'} enabled=${cfg.enabled} jevOnly=${cfg.jevOnly}`);
   const vcfg = jevVisionConfig();
   debugLog(`[jv] mode enabled=${vcfg.enabled} jevKey=${cfg.source || 'none'} planner=${!!vcfg.plannerKey} model=${vcfg.cfg.model}`);
+  setCaptureLogger(debugLog);
+  if (vcfg.enabled) setTimeout(warmVision, 1500); // after the pill is up, off the startup path
 });
 
 app.on('will-quit', () => {
@@ -925,11 +927,45 @@ function refocusHwnd(hwnd) {
   ).catch(() => {});
 }
 
+function plannerTuning(cfg) {
+  return {
+    hedgeMs: cfg.plannerHedgeMs,
+    maxRequests: cfg.plannerMaxRequests,
+    thinkingLevel: cfg.plannerThinking,
+    maxOutputTokens: cfg.plannerMaxTokens,
+  };
+}
+
+// Prewarm everything the first vision run would otherwise pay for: TLS +
+// keep-alive to both APIs (no billing: a HEAD on the origin), the capture
+// stream and the Start-menu app index. Network warmup runs at most once per 60 s.
+let lastNetWarm = 0;
+function warmVision(withIndex = true) {
+  const bundle = jevVisionConfig();
+  if (!bundle.enabled || !bundle.cfg.warmup) return;
+  const now = Date.now();
+  if (now - lastNetWarm >= 60000) {
+    lastNetWarm = now;
+    const hosts = ['https://api.typesafe.ai/'];
+    if (bundle.plannerKey) hosts.push('https://generativelanguage.googleapis.com/');
+    for (const url of hosts) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 4000);
+      fetch(url, { method: 'HEAD', signal: ctl.signal })
+        .then((res) => { try { if (res.body) res.body.cancel(); } catch {} })
+        .catch(() => {})
+        .finally(() => clearTimeout(timer));
+    }
+  }
+  if (bundle.cfg.fastCapture) warmCapture({ maxSide: bundle.cfg.imgMaxSide });
+  if (withIndex) automation.warmAppIndex(); // boot / text box only, never on a run's critical path
+}
+
 function visionDeps(bundle, ctl, controller) {
   const { jevKey, plannerKey, cfg } = bundle;
   let targetHwnd = null; // window of the most recent UIA snapshot
   return {
-    capture: () => capturePrimaryJpeg({ maxSide: cfg.imgMaxSide, quality: cfg.jpegQuality }),
+    capture: () => capturePrimaryJpeg({ maxSide: cfg.imgMaxSide, quality: cfg.jpegQuality, fast: cfg.fastCapture }),
     uiaSnapshot: async () => {
       const snap = await uia.uiaSnapshot({
         excludePid: process.pid,
@@ -952,18 +988,23 @@ function visionDeps(bundle, ctl, controller) {
       return automation.computerAction({ ...params, physW, physH, scaleX, scaleY });
     },
     openApp: (name) => automation.openApp(name),
+    // http(s) only (the planner validates too); the OS opens it in the default browser.
+    openUrl: async (url) => {
+      if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return { success: false };
+      try { await shell.openExternal(url); return { success: true }; } catch { return { success: false }; }
+    },
     jev: ({ state, questions, image }) => jevCallImages({
       key: jevKey, model: cfg.model, state, questions, images: [image],
       transport: cfg.transport, timeoutMs: cfg.jevTimeoutMs, signal: controller.signal,
     }),
     plan: plannerKey ? (instruction) => planTask({
       key: plannerKey, instruction, model: cfg.plannerModel,
-      timeoutMs: cfg.plannerTimeoutMs, signal: controller.signal,
+      timeoutMs: cfg.plannerTimeoutMs, signal: controller.signal, ...plannerTuning(cfg),
     }) : null,
     replan: plannerKey ? (args) => replanTask({
       key: plannerKey, instruction: args.instruction, done: args.done,
       failed: args.failed, screen: args.screen, model: cfg.plannerModel,
-      timeoutMs: cfg.plannerTimeoutMs, signal: controller.signal,
+      timeoutMs: cfg.plannerTimeoutMs, signal: controller.signal, ...plannerTuning(cfg),
     }) : null,
     confirm: async (text) => {
       const opts = { type: 'warning', buttons: ['Do it', 'Cancel'], defaultId: 1, cancelId: 1, message: text };
@@ -1016,7 +1057,7 @@ ipcMain.handle('jev-vision-run', async (_e, instruction) => {
     // The previously focused app regains focus asynchronously after action
     // mode (T13); let it settle before the first capture/UIA snapshot.
     await new Promise(r => setTimeout(r, 150));
-    try { fetch('https://api.typesafe.ai/', { method: 'HEAD' }).catch(() => {}); } catch {}
+    warmVision(false); // connections + capture only; the app index is not built during a run
     uia.uiaWarm();
     const deps = visionDeps(bundle, ctl, controller);
     return await runVisionTask(instruction, deps, bundle.cfg);
@@ -1027,6 +1068,8 @@ ipcMain.handle('jev-vision-run', async (_e, instruction) => {
     exitActionMode();
   }
 });
+
+ipcMain.handle('jev-vision-warm', () => { warmVision(); return true; });
 
 ipcMain.handle('jev-vision-abort', () => {
   if (visionRun) {

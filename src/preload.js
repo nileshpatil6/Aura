@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   jevVisionStatus:     ()     => ipcRenderer.invoke('jev-vision-status'),
   jevVisionRun:        (text) => ipcRenderer.invoke('jev-vision-run', text),
   jevVisionAbort:      ()     => ipcRenderer.invoke('jev-vision-abort'),
+  jevVisionWarm:       ()     => ipcRenderer.invoke('jev-vision-warm'),
   onJevVisionProgress: (cb)   => ipcRenderer.on('jev-vision-progress', (_e, evt) => cb(evt)),
 
   // Extended automation

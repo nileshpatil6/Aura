@@ -242,6 +242,11 @@ async function runVisionTask(instruction, deps, cfg) {
     } else if (step.op === 'open_app') {
       await deps.openApp(step.app);
       via = 'app';
+    } else if (step.op === 'open_url') {
+      if (!deps.openUrl) return { error: 'open_url is not supported here' };
+      const opened = await deps.openUrl(step.url);
+      if (opened && opened.success === false) return { error: 'could not open the url' };
+      via = 'url';
     } else if (step.op === 'wait') {
       await deps.sleep((step.seconds || 1) * 1000);
       via = 'wait';
@@ -330,7 +335,7 @@ async function runVisionTask(instruction, deps, cfg) {
       return finish('error', (pr && pr.error) || 'planning failed');
     }
     plan = pr.plan;
-    log(`[jv] run "${sanitizeText(instruction, 80)}" plan=gemini ${Math.round(state.plannerMs)}ms steps=${plan.steps.length}`);
+    log(`[jv] run "${sanitizeText(instruction, 80)}" plan=gemini ${Math.round(state.plannerMs)}ms req=${pr.requests || 1} steps=${plan.steps.length}`);
     if (plan.steps[0] && stepNeedsGround(plan.steps[0]) && capRes && capRes.ok &&
         deps.now() - capRes.at <= cfg.settleMs * 4) {
       prefetched = capRes;
@@ -372,8 +377,9 @@ async function runVisionTask(instruction, deps, cfg) {
         pollCount = 0;
         logJev(obs, 'verified');
       } else {
-        const openApp = pending.step.op === 'open_app';
-        const exhausted = openApp
+        // Launching an app or a page takes seconds; give both the long window.
+        const launching = pending.step.op === 'open_app' || pending.step.op === 'open_url';
+        const exhausted = launching
           ? deps.now() - pending.actedAt >= cfg.appWaitMs
           : pollCount >= cfg.maxPolls;
         if (!exhausted) {

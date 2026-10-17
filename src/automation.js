@@ -207,7 +207,114 @@ function runPersistent(script, timeoutMs = 8000) {
 
 function shutdownAutomation() { killPS(); }
 
+// ── Start-menu app index ─────────────────────────────────────────────────────
+// open_app used to spawn a cold PowerShell and search Get-StartApps on every
+// call (2+ s). The index is built in a separate one-shot PowerShell (never on the
+// shared persistent queue that serves clicks) by the boot / text-box warmup, and
+// refreshed on a miss; build attempts, failed or not, are at most one per 60 s.
+// A launch that arrives before the index exists uses the old path immediately and apps launch through explorer.exe shell:AppsFolder\<id>,
+// which needs no PowerShell at all. Unknown names keep the old script path.
+const APP_INDEX_REFRESH_MS = 60000;
+let appIndex = null;        // [{ name, key, appId }]
+let appIndexAt = 0;         // time of the last build ATTEMPT, successful or not
+let appIndexLoading = null;
+let appIndexRunner = (script) => runPowerShell(script); // swapped by tests
+
+function normalizeAppName(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// AppIDs that explorer can open through shell:AppsFolder: AUMIDs (Pkg!App) and
+// known-folder paths ({GUID}\app.exe). Raw paths and URLs (they contain ':') are skipped.
+const APP_ID_RE = /^[A-Za-z0-9_.\-!{}\\ +(),]+$/;
+
+/** Parse "name||appid" lines (Get-StartApps output) into index entries. */
+function parseAppIndex(output) {
+  const entries = [];
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const i = line.lastIndexOf('||');
+    if (i < 1) continue;
+    const name = line.slice(0, i).trim();
+    const appId = line.slice(i + 2).trim();
+    const key = normalizeAppName(name);
+    if (!key || !appId || !APP_ID_RE.test(appId)) continue;
+    entries.push({ name, key, appId });
+  }
+  return entries;
+}
+
+/**
+ * Best entry for a spoken app name: exact, then names containing it as whole
+ * words with the shortest name winning ("Google Chrome" over "Chrome Remote
+ * Desktop"). Uninstallers never match unless asked for.
+ */
+function lookupAppEntry(entries, name) {
+  const q = normalizeAppName(name).replace(/^the /, '');
+  if (q.length < 2 || !Array.isArray(entries)) return null;
+  const wantsUninstall = q.includes('uninstall');
+  const pool = entries.filter(e => wantsUninstall || !e.key.includes('uninstall'));
+  const exact = pool.find(e => e.key === q);
+  if (exact) return exact;
+  const shortest = (list) => list.sort((a, b) => a.key.length - b.key.length)[0] || null;
+  const padded = ` ${q} `;
+  return shortest(pool.filter(e => ` ${e.key} `.includes(padded)));
+}
+
+async function loadAppIndex() {
+  if (appIndexLoading) return appIndexLoading;
+  appIndexLoading = (async () => {
+    const script = 'Get-StartApps | ForEach-Object { $_.Name + "||" + $_.AppID }';
+    appIndexAt = Date.now();
+    const output = (await appIndexRunner(script)).output;
+    const entries = parseAppIndex(output);
+    appIndexAt = Date.now();
+    if (entries.length) appIndex = entries;
+    return appIndex;
+  })().catch(() => appIndex).finally(() => { appIndexLoading = null; });
+  return appIndexLoading;
+}
+
+/** Start building the index in the background (vision mode boot / text box open). */
+function warmAppIndex() {
+  if (process.env.AURA_APP_INDEX === '0') return;
+  if (!appIndex && !appIndexLoading && Date.now() - appIndexAt > APP_INDEX_REFRESH_MS) loadAppIndex();
+}
+
+async function findIndexedApp(name) {
+  if (process.env.AURA_APP_INDEX === '0') return null;
+  if (!appIndex) return null; // not built yet: do not make the caller wait for it
+  let hit = lookupAppEntry(appIndex, name);
+  if (!hit && Date.now() - appIndexAt > APP_INDEX_REFRESH_MS) {
+    await loadAppIndex();
+    hit = lookupAppEntry(appIndex, name);
+  }
+  return hit;
+}
+
+function launchAppId(appId) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => { if (!settled) { settled = true; resolve(ok); } };
+    try {
+      const child = spawn('explorer.exe', ['shell:AppsFolder\\' + appId], { detached: true, stdio: 'ignore' });
+      child.on('error', () => done(false));
+      child.on('spawn', () => done(true));
+      child.unref();
+    } catch {
+      done(false);
+    }
+  });
+}
+
 async function openApp(name, url) {
+  if (!url && typeof name === 'string' && name.trim()) {
+    // Hardcoded web-link entries (youtube, netflix...) are websites, not Start apps.
+    const hardcoded = APP_COMMANDS[name.toLowerCase().trim()];
+    if (!(hardcoded && /https?:/i.test(hardcoded))) {
+      const hit = await findIndexedApp(name);
+      if (hit && await launchAppId(hit.appId)) return { success: true, output: `Opened ${hit.name}` };
+    }
+  }
   const script = buildOpenAppScript(name, url);
   return runPowerShell(script);
 }
@@ -585,4 +692,12 @@ module.exports = {
   lockScreen, sleepPc,
   shutdownAutomation,
   buildTypeScript, // exported for scripts/jev-vision-selftest.js
+  warmAppIndex, parseAppIndex, lookupAppEntry,
+  __appIndexTest: {
+    setRunner(fn) { appIndexRunner = fn; },
+    reset() { appIndex = null; appIndexAt = 0; appIndexLoading = null; },
+    find: (name) => findIndexedApp(name),
+    isLoading: () => !!appIndexLoading,
+    wait: async () => { if (appIndexLoading) await appIndexLoading; },
+  },
 };

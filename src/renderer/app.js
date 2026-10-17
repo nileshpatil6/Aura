@@ -306,6 +306,7 @@ function openVisionInput() {
   textInputRow.classList.remove('hidden');
   textInput.placeholder = 'Tell Aura what to do...';
   setTimeout(() => textInput.focus(), 40);
+  window.electronAPI?.jevVisionWarm?.().catch(() => {}); // prewarm connections, capture, app index
 }
 
 async function activateVoice() {

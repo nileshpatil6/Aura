@@ -38,7 +38,13 @@ const DEFAULT_VISION_CFG = Object.freeze({
   confirm: true,                    // AURA_JV_CONFIRM ('0' = refuse consequential instead of asking)
   finalVerify: true,                // AURA_JV_FINAL_VERIFY ('0' skips the task_done call)
   plannerModel: 'gemini-3.6-flash', // AURA_PLANNER_MODEL
-  plannerTimeoutMs: 8000,           // AURA_PLANNER_TIMEOUT_MS
+  plannerTimeoutMs: 12000,          // AURA_PLANNER_TIMEOUT_MS, whole planner budget incl. hedges
+  plannerHedgeMs: 2500,             // AURA_PLANNER_HEDGE_MS, start a parallel identical request after this
+  plannerMaxRequests: 3,            // AURA_PLANNER_MAX_REQUESTS, hedges plus replacements per plan
+  plannerThinking: 'low',           // AURA_PLANNER_THINKING: minimal|low|medium|high
+  plannerMaxTokens: 2048,           // AURA_PLANNER_MAX_TOKENS, 256..8192
+  fastCapture: true,                // AURA_JV_FAST_CAPTURE ('0' = always use desktopCapturer thumbnails)
+  warmup: true,                     // AURA_JV_WARMUP ('0' = no connection/capture/app-index prewarm)
   thresholds: Object.freeze({
     prevDone: 0.6, taskDone: 0.7, visible: 0.5, boxConf: 0.3, boxMaxArea: 0.25,
     element: 0.7, risky: 0.5, blocked: 0.8,
@@ -114,6 +120,13 @@ function readVisionConfig(env = {}) {
     finalVerify: envBool(env, 'AURA_JV_FINAL_VERIFY', d.finalVerify),
     plannerModel: envString(env, 'AURA_PLANNER_MODEL', d.plannerModel),
     plannerTimeoutMs: envNumber(env, 'AURA_PLANNER_TIMEOUT_MS', d.plannerTimeoutMs, { min: 1, integer: true }),
+    plannerHedgeMs: envNumber(env, 'AURA_PLANNER_HEDGE_MS', d.plannerHedgeMs, { min: 0, integer: true }),
+    plannerMaxRequests: envNumber(env, 'AURA_PLANNER_MAX_REQUESTS', d.plannerMaxRequests, { clamp: true, min: 1, max: 3 }),
+    plannerThinking: ['minimal', 'low', 'medium', 'high'].indexOf(envString(env, 'AURA_PLANNER_THINKING', d.plannerThinking)) !== -1
+      ? envString(env, 'AURA_PLANNER_THINKING', d.plannerThinking) : d.plannerThinking,
+    plannerMaxTokens: envNumber(env, 'AURA_PLANNER_MAX_TOKENS', d.plannerMaxTokens, { clamp: true, min: 256, max: 8192 }),
+    fastCapture: envBool(env, 'AURA_JV_FAST_CAPTURE', d.fastCapture),
+    warmup: envBool(env, 'AURA_JV_WARMUP', d.warmup),
     thresholds: d.thresholds,
   };
 }
@@ -181,6 +194,19 @@ function isClickOp(op) {
   return CLICK_OPS.indexOf(op) !== -1;
 }
 
+const MAX_URL_LEN = 2000;
+
+/** Normalized href for an http(s) URL, or null. Anything else (file:, javascript:, ...) is rejected. */
+function parseHttpUrl(raw) {
+  const text = collapse(raw);
+  if (!text || text.length > MAX_URL_LEN) return null;
+  let u;
+  try { u = new URL(text); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  if (!u.hostname || u.username || u.password) return null;
+  return u.href;
+}
+
 /**
  * Validate a raw planner plan. Nothing is dropped silently: any invalid step
  * fails the whole plan with the step index in the error. Steps past 12 are
@@ -200,14 +226,15 @@ function validatePlan(raw) {
     if (!rawStep || typeof rawStep !== 'object') return { ok: false, error: `${at}: not an object` };
 
     const op = typeof rawStep.op === 'string' ? rawStep.op : '';
-    if (['click', 'double_click', 'right_click', 'type', 'hotkey', 'scroll', 'open_app', 'wait'].indexOf(op) === -1) {
+    if (['click', 'double_click', 'right_click', 'type', 'hotkey', 'scroll', 'open_app', 'open_url', 'wait'].indexOf(op) === -1) {
       return { ok: false, error: `${at}: bad op "${op}"` };
     }
 
     const step = { op };
     if (rawStep.target !== undefined) step.target = cleanTarget(rawStep.target);
     if (rawStep.done_when !== undefined) step.done_when = cleanTarget(rawStep.done_when);
-    if (rawStep.risky !== undefined) step.risky = rawStep.risky === true;
+    // open_url is never risky: the URL is only opened, nothing is submitted.
+    if (rawStep.risky !== undefined && op !== 'open_url') step.risky = rawStep.risky === true;
 
     if (isClickOp(op) && !step.target) return { ok: false, error: `${at}: target required for ${op}` };
 
@@ -230,6 +257,10 @@ function validatePlan(raw) {
         amount = Number.isFinite(n) ? Math.min(15, Math.max(1, Math.round(n))) : 5;
       }
       step.amount = amount;
+    } else if (op === 'open_url') {
+      const url = parseHttpUrl(rawStep.url);
+      if (!url) return { ok: false, error: `${at}: open_url needs an http or https url` };
+      step.url = url;
     } else if (op === 'open_app') {
       const app = cleanString(rawStep.app);
       if (!app) return { ok: false, error: `${at}: app required for open_app` };
@@ -344,6 +375,10 @@ function isRiskyHotkey(keys) {
   return norm === 'ctrl+enter' || norm === 'alt+f4' || norm === 'shift+delete';
 }
 
+function hostOf(url) {
+  try { return new URL(url).hostname; } catch { return String(url || ''); }
+}
+
 /** Short human description used in progress events, state.step and logs. */
 function describeStep(step) {
   if (!step || !step.op) return '';
@@ -359,6 +394,7 @@ function describeStep(step) {
     case 'hotkey': return `press ${sanitizeText(step.keys, 40)}`;
     case 'scroll': return `scroll ${step.direction || 'down'}`;
     case 'open_app': return `open ${sanitizeText(step.app, 80)}`;
+    case 'open_url': return `open ${sanitizeText(hostOf(step.url), 80)}`;
     case 'wait': return `wait ${step.seconds}s`;
     default: return step.op;
   }
@@ -639,6 +675,7 @@ function actionSignature(step, click) {
   if (step.op === 'type') parts.push(step.text || '');
   if (step.op === 'hotkey') parts.push(step.keys || '');
   if (step.op === 'open_app') parts.push(step.app || '');
+  if (step.op === 'open_url') parts.push(step.url || '');
   if (step.op === 'scroll') parts.push(`${step.direction || 'down'}:${step.amount || 5}`);
   return parts.join('|');
 }
@@ -655,6 +692,7 @@ module.exports = {
   parseTrivialCommand,
   isConsequential,
   isRiskyHotkey,
+  parseHttpUrl,
   describeStep,
   buildVisionRequest,
   interpretVisionAnswers,

@@ -3,6 +3,8 @@
 //   npx electron scripts/jev-vision-probe.js --target "the Windows Start button" [--delay 2]
 //     [--max 1280] [--q 70] [--transport multipart|json] [--model jev-1.14.0]
 //     [--repeat 1..5] [--move] [--save <path>] [--uia]
+//   npx electron scripts/jev-vision-probe.js --bench-capture 20 [--max 1280] [--q 70]
+//     (no key needed; compares the stream capture with the desktopCapturer thumbnail)
 // Contract: docs/jev-vision/CONTRACT.md section 7, step 2.
 
 const path = require('path');
@@ -12,7 +14,7 @@ const { resolveJevKey } = require(path.join(__dirname, '..', 'src', 'env-keys.js
 function parseArgs(argv) {
   const out = {
     target: '', delay: 0, max: 1280, q: 70, transport: 'multipart',
-    model: 'jev-1.14.0', repeat: 1, move: false, save: null, uia: false,
+    model: 'jev-1.14.0', repeat: 1, move: false, save: null, uia: false, benchCapture: 0,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -26,6 +28,7 @@ function parseArgs(argv) {
     else if (a === '--move') out.move = true;
     else if (a === '--save') out.save = argv[++i] || null;
     else if (a === '--uia') out.uia = true;
+    else if (a === '--bench-capture') out.benchCapture = Math.min(100, Math.max(1, Number(argv[++i]) || 20));
   }
   return out;
 }
@@ -38,8 +41,56 @@ function median(values) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+function pct(sorted, p) {
+  return sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] : 0;
+}
+
+async function benchCapture(args) {
+  const { app } = require('electron');
+  const sc = require(path.join(__dirname, '..', 'src', 'screen-capture.js'));
+  await app.whenReady();
+  sc.setCaptureLogger((l) => console.log(l));
+  const opts = { maxSide: args.max, quality: args.q };
+  const report = (label, times, extra) => {
+    const sorted = times.slice().sort((a, b) => a - b);
+    console.log(`${label}: p50=${pct(sorted, 0.5)}ms p90=${pct(sorted, 0.9)}ms max=${sorted[sorted.length - 1]}ms n=${sorted.length}${extra || ''}`);
+  };
+
+  const thumb = [];
+  let dims = '';
+  for (let i = 0; i < args.benchCapture; i++) {
+    const t0 = Date.now();
+    const r = await sc.captureViaThumbnail(opts);
+    if (!r.ok) { console.error(`thumbnail failed: ${r.error}`); continue; }
+    thumb.push(Date.now() - t0);
+    dims = `${r.width}x${r.height} ${Math.round(r.jpeg.length / 1024)}KB`;
+  }
+  report('thumbnail', thumb, ` image=${dims}`);
+
+  const tCold = Date.now();
+  const first = await sc.capturePrimaryJpeg(opts);
+  console.log(`stream cold start + first frame: ${Date.now() - tCold}ms via=${first.ok ? first.via : 'FAIL ' + first.error}`);
+  const fast = [];
+  const via = {};
+  for (let i = 0; i < args.benchCapture; i++) {
+    const t0 = Date.now();
+    const r = await sc.capturePrimaryJpeg(opts);
+    if (!r.ok) { console.error(`stream capture failed: ${r.error}`); continue; }
+    fast.push(Date.now() - t0);
+    via[r.via] = (via[r.via] || 0) + 1;
+    dims = `${r.width}x${r.height} ${Math.round(r.jpeg.length / 1024)}KB`;
+    if (args.save && i === 0) { try { fs.writeFileSync(args.save, r.jpeg); } catch {} }
+    await sleep(60);
+  }
+  report('stream   ', fast, ` image=${dims} via=${JSON.stringify(via)}`);
+  sc.stopCapture();
+  app.quit();
+  process.exit(fast.length ? 0 : 1);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.benchCapture) { await benchCapture(args); return; }
   if (!args.target) { console.error('usage: npx electron scripts/jev-vision-probe.js --target "<description>"'); process.exit(2); }
 
   const { key, source } = resolveJevKey({ searchDirs: [process.cwd()] });

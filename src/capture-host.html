@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Aura capture host</title>
+</head>
+<body>
+<script>
+// Hidden, never-shown page owned by src/screen-capture.js. It keeps one
+// primary-display video stream open and hands back JPEG frames on request, so a
+// screenshot costs a canvas encode instead of a desktopCapturer thumbnail.
+let stream = null;
+let reader = null;
+let running = false;
+let latest = null;      // newest VideoFrame
+let frameAt = 0;        // performance.now() when `latest` arrived
+let waiters = [];       // resolvers woken by every new frame
+
+function wake() {
+  const list = waiters;
+  waiters = [];
+  for (const fn of list) fn();
+}
+
+// Resolves true once a frame newer than `since` has arrived, false on timeout.
+function waitFrame(since, timeoutMs) {
+  return new Promise((resolve) => {
+    if (frameAt > since) { resolve(true); return; }
+    const timer = setTimeout(() => {
+      waiters = waiters.filter(w => w !== onFrame);
+      resolve(false);
+    }, timeoutMs);
+    function onFrame() {
+      if (frameAt > since) { clearTimeout(timer); resolve(true); }
+      else waiters.push(onFrame);
+    }
+    waiters.push(onFrame);
+  });
+}
+
+async function pump() {
+  try {
+    while (running) {
+      const r = await reader.read();
+      if (r.done) break;
+      const prev = latest;
+      latest = r.value;
+      frameAt = performance.now();
+      if (prev) { try { prev.close(); } catch (e) {} }
+      wake();
+    }
+  } catch (e) { /* stream ended */ }
+  running = false;
+  wake();
+}
+
+async function stop() {
+  running = false;
+  try { if (reader) await reader.cancel(); } catch (e) {}
+  try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  try { if (latest) latest.close(); } catch (e) {}
+  stream = null; reader = null; latest = null; frameAt = 0;
+}
+
+async function start(sourceId, maxW, maxH, fps) {
+  await stop();
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: sourceId,
+        maxWidth: maxW,
+        maxHeight: maxH,
+        maxFrameRate: fps,
+      },
+    },
+  });
+  const track = stream.getVideoTracks()[0];
+  const processor = new MediaStreamTrackProcessor({ track });
+  reader = processor.readable.getReader();
+  running = true;
+  pump();
+  const got = await waitFrame(performance.now(), 3000);
+  if (!got || !latest) throw new Error('no first frame');
+  return { w: latest.displayWidth, h: latest.displayHeight };
+}
+
+function bytesToBase64(bytes) {
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+// Waits for a frame that arrived AFTER this call (so a screenshot taken right
+// after an action shows the result), falling back to the newest frame when the
+// screen is static and the capturer sends nothing new.
+async function grab(quality, waitMs) {
+  if (!running) throw new Error('stream not running');
+  const t = performance.now();
+  const fresh = await waitFrame(t, waitMs);
+  let frame = latest;
+  if (!frame) throw new Error('no frame');
+  const w = frame.displayWidth;
+  const h = frame.displayHeight;
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(frame, 0, 0);
+  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return { b64: bytesToBase64(bytes), w, h, fresh, ageMs: Math.round(performance.now() - frameAt) };
+}
+</script>
+</body>
+</html>
