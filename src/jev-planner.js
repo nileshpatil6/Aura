@@ -11,8 +11,9 @@ const SYSTEM_PROMPT = [
   '',
   'Each step has an "op" and its fields:',
   '- click / double_click / right_click: "target" (short, unique visual description of the control).',
+  '- drag: press, move and release the mouse. Either "target" (an area, e.g. "the white drawing canvas") with "from" and "to" as [x,y] fractions 0..1 inside that area (from [0.2,0.8] to [0.8,0.8] is a horizontal line near the bottom; when both are left out the drag goes from [0.25,0.25] to [0.75,0.75], which is right for dragging out a shape), or "target_from" and "target_to" (two controls, e.g. a file icon and a folder). Use it to draw shapes, move sliders, drag and drop. A shape needs one drag per stroke, each with its own from and to: a house is a square (four drags: top [0.3,0.5]->[0.7,0.5], right [0.7,0.5]->[0.7,0.9], bottom [0.7,0.9]->[0.3,0.9], left [0.3,0.9]->[0.3,0.5]) plus a roof (two drags meeting at [0.5,0.25]).',
   '- type: "text" (the exact literal to type, copied from the user instruction or required to complete it, e.g. a URL, a search query), optional "target" (the field to click first), optional "submit" (press Enter after), optional "clear" (Ctrl+A before typing).',
-  '- hotkey: "keys" as lowercase tokens joined by + (for example "ctrl+l", "enter", "win+d").',
+  '- hotkey: "keys" as lowercase tokens joined by + (for example "ctrl+l", "enter", "win+d"). Only letters, digits and key names (enter, tab, esc, f5, up...); never punctuation keys such as a backtick.',
   '- scroll: optional "direction" ("up" or "down", default down) and optional "amount" (1..15, default 5).',
   '- open_app: "app" (the application name).',
   '- open_url: "url" (a full http or https address). Chrome is the default browser, so this opens the page there.',
@@ -28,6 +29,8 @@ const SYSTEM_PROMPT = [
   '- done_when describes visible state, never a key press or a file operation.',
   '- Mark risky true for send, delete, buy, pay, publish, post or submit forms.',
   '- At most 12 steps. Keep it minimal.',
+  '- You will be asked again, with a screenshot, once these steps have run. For open-ended tasks plan only the next concrete steps (a short list is fine); do not guess what the screen will look like afterwards.',
+  '- Prefer direct URLs over clicking: site search URLs such as https://www.flipkart.com/search?q=<query>, https://www.amazon.in/s?k=<query>, https://www.youtube.com/results?search_query=<query>.',
   '- Output JSON only: {"steps":[ ... ]}.',
 ].join('\n');
 
@@ -39,8 +42,12 @@ const PLAN_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          op: { type: 'string', enum: ['click', 'double_click', 'right_click', 'type', 'hotkey', 'scroll', 'open_app', 'open_url', 'wait'] },
+          op: { type: 'string', enum: ['click', 'double_click', 'right_click', 'drag', 'type', 'hotkey', 'scroll', 'open_app', 'open_url', 'wait'] },
           target: { type: 'string' },
+          target_from: { type: 'string' },
+          target_to: { type: 'string' },
+          from: { type: 'array', items: { type: 'number' }, description: 'drag start as [x,y] fractions 0..1 inside the target area; give a different point for every stroke' },
+          to: { type: 'array', items: { type: 'number' }, description: 'drag end as [x,y] fractions 0..1 inside the target area' },
           text: { type: 'string' },
           keys: { type: 'string' },
           app: { type: 'string' },
@@ -58,6 +65,12 @@ const PLAN_SCHEMA = {
     },
   },
   required: ['steps'],
+};
+
+// Replans may declare the task finished (no more steps) after looking at the screen.
+const REPLAN_SCHEMA = {
+  ...PLAN_SCHEMA,
+  properties: { ...PLAN_SCHEMA.properties, task_complete: { type: 'boolean' } },
 };
 
 // Strip markdown fences; the model occasionally wraps JSON even when asked not to.
@@ -83,15 +96,19 @@ function firstErrorMessage(json) {
  * hedgedPlan below owns retries and hedging.
  * @returns {Promise<{ok:true, text:string, ms:number}|{ok:false, error:string, status?:number, ms:number}>}
  */
-async function geminiGenerate({ key, model, userText, timeoutMs, signal, thinkingLevel = 'low', maxOutputTokens = 2048, fetchFn = fetch }) {
+async function geminiGenerate({ key, model, userText, timeoutMs, signal, thinkingLevel = 'low', maxOutputTokens = 2048, fetchFn = fetch,
+                                 imageJpeg = null, schema = PLAN_SCHEMA }) {
   const start = Date.now();
   const url = `${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`;
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    contents: [{ role: 'user', parts: [
+      ...(imageJpeg && imageJpeg.length ? [{ inlineData: { mimeType: 'image/jpeg', data: Buffer.from(imageJpeg).toString('base64') } }] : []),
+      { text: userText },
+    ] }],
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: PLAN_SCHEMA,
+      responseSchema: schema,
       temperature: 0.2,
       maxOutputTokens,
       thinkingConfig: { thinkingLevel },
@@ -151,12 +168,16 @@ async function geminiGenerate({ key, model, userText, timeoutMs, signal, thinkin
   }
 }
 
-function parseAndValidate(text, source) {
+function parseAndValidate(text, source, allowComplete) {
   let parsed;
   try {
     parsed = JSON.parse(stripFences(text));
   } catch (e) {
     return { ok: false, error: 'planner returned invalid JSON' };
+  }
+  // "Nothing more to do": only when the caller can act on it (continue replans).
+  if (allowComplete && parsed && parsed.task_complete === true && (!Array.isArray(parsed.steps) || parsed.steps.length === 0)) {
+    return { ok: true, plan: { steps: [], source, complete: true } };
   }
   return validatePlan({ ...parsed, source });
 }
@@ -174,7 +195,8 @@ const MIN_REQUEST_MS = 400; // do not start a request with less budget than this
  * @returns {Promise<{ok:true, plan:object, ms:number, requests:number}|{ok:false, error:string, status?:number, ms:number, requests:number}>}
  */
 function hedgedPlan({ key, userText, source, model, timeoutMs, hedgeMs, maxRequests = 3, signal,
-                      thinkingLevel, maxOutputTokens, fetchFn, retryAfter429Ms = 1000 }) {
+                      thinkingLevel, maxOutputTokens, fetchFn, retryAfter429Ms = 1000,
+                      imageJpeg = null, allowComplete = false }) {
   return new Promise((resolve) => {
     const start = Date.now();
     const ctls = new Set();
@@ -211,13 +233,14 @@ function hedgedPlan({ key, userText, source, model, timeoutMs, hedgeMs, maxReque
       const ctl = new AbortController();
       ctls.add(ctl);
       geminiGenerate({ key, model, userText, timeoutMs: remaining, signal: ctl.signal,
-                       thinkingLevel, maxOutputTokens, fetchFn }).then((gen) => {
+                       thinkingLevel, maxOutputTokens, fetchFn, imageJpeg,
+                       schema: allowComplete ? REPLAN_SCHEMA : PLAN_SCHEMA }).then((gen) => {
         pending--;
         ctls.delete(ctl);
         if (done) return;
         let failure = gen;
         if (gen.ok) {
-          const v = parseAndValidate(gen.text, source);
+          const v = parseAndValidate(gen.text, source, allowComplete);
           if (v.ok) { finish({ ok: true, plan: v.plan }); return; }
           failure = { ok: false, error: v.error };
         }
@@ -281,13 +304,20 @@ async function planTask({ key, instruction, model, timeoutMs, signal, ...opts })
 }
 
 /**
- * Replan from the current point. Returns REMAINING steps only.
+ * Replan from the current point. Returns REMAINING steps only. With `image` (the
+ * current screenshot as JPEG) Gemini sees what the user sees; `mode: 'continue'`
+ * means every planned step already ran and the task is not confirmed done, so
+ * the planner may also answer {"steps":[],"task_complete":true}.
  * @param {{ key:string, instruction:string, done:string[],
- *           failed:{step:object, reason:string},
+ *           failed:{step:object, reason:string}|null,
  *           screen:{title:string, process:string, elements:string[]}|null,
+ *           image?:Buffer|null, jev?:{vis?:number, boxConf?:number, prevDone?:number, taskDone?:number}|null,
+ *           mode?:'fail'|'continue',
  *           model:string, timeoutMs:number, signal:AbortSignal }} req
  */
-async function replanTask({ key, instruction, done, failed, screen, model, timeoutMs, signal, ...opts }) {
+async function replanTask({ key, instruction, done, failed, screen, image, jev, mode, model, timeoutMs, signal, ...opts }) {
+  const hasImage = !!(image && image.length);
+  const fmt = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(2) : null);
   const lines = ['TASK:', instruction, ''];
   lines.push('STEPS ALREADY COMPLETED:');
   if (done && done.length) for (const d of done) lines.push(`- ${d}`);
@@ -297,6 +327,20 @@ async function replanTask({ key, instruction, done, failed, screen, model, timeo
     lines.push(`THE STEP THAT FAILED: ${describeStep(failed.step)}`);
     lines.push(`FAILURE REASON: ${failed.reason || 'unknown'}`);
     lines.push('');
+  } else if (mode === 'continue') {
+    lines.push('All planned steps have run, but the task is not confirmed complete.');
+    lines.push('');
+  }
+  if (jev) {
+    const bits = [];
+    if (fmt(jev.vis) !== null) bits.push(`target visibility ${fmt(jev.vis)}`);
+    if (fmt(jev.boxConf) !== null) bits.push(`locator confidence ${fmt(jev.boxConf)}`);
+    if (fmt(jev.prevDone) !== null) bits.push(`last step verified ${fmt(jev.prevDone)}`);
+    if (fmt(jev.taskDone) !== null) bits.push(`task done ${fmt(jev.taskDone)}`);
+    if (bits.length) {
+      lines.push(`THE VISION CHECKER SAID (0 = no, 1 = yes): ${bits.join(', ')}.`);
+      lines.push('');
+    }
   }
   if (screen) {
     lines.push(`CURRENT WINDOW: "${screen.title || ''}" (process: ${screen.process || ''})`);
@@ -306,9 +350,21 @@ async function replanTask({ key, instruction, done, failed, screen, model, timeo
     }
     lines.push('');
   }
-  lines.push('Return ONLY the remaining steps needed to finish TASK. Do not repeat completed steps.');
+  if (hasImage) {
+    lines.push('The attached image is the screen right now.');
+    lines.push('Describe each click target by the text, label or icon that is visible on this screen, not by what you expect to see.');
+  }
+  lines.push('Prefer direct URLs (for example https://www.flipkart.com/search?q=<query>, https://www.amazon.in/s?k=<query>) over clicking search results or menus.');
+  lines.push('Return ONLY the next steps needed to finish TASK, at most 5. Do not repeat completed steps. You will be asked again after these run.');
+  if (mode === 'continue') {
+    lines.push('First check the screenshot: if TASK is already visibly complete, return exactly {"steps":[],"task_complete":true}.');
+  }
 
-  return hedgedPlan({ key, userText: lines.join('\n'), source: 'replan', model, timeoutMs, signal, ...plannerOpts(opts) });
+  return hedgedPlan({
+    key, userText: lines.join('\n'), source: 'replan', model, timeoutMs, signal,
+    imageJpeg: hasImage ? image : null, allowComplete: mode === 'continue',
+    ...plannerOpts(opts),
+  });
 }
 
-module.exports = { planTask, replanTask, hedgedPlan, SYSTEM_PROMPT, PLAN_SCHEMA };
+module.exports = { planTask, replanTask, hedgedPlan, SYSTEM_PROMPT, PLAN_SCHEMA, REPLAN_SCHEMA };

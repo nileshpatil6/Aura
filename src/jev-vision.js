@@ -33,10 +33,12 @@ const DEFAULT_VISION_CFG = Object.freeze({
   maxActions: 25,                   // AURA_JV_MAX_ACTIONS
   maxJevCalls: 40,                  // AURA_JV_MAX_CALLS
   maxMs: 120000,                    // AURA_JV_MAX_MS
-  maxReplans: 2,                    // AURA_JV_MAX_REPLANS
+  maxReplans: 5,                    // AURA_JV_MAX_REPLANS (failure replans and "continue" replans share it)
   sameActionLimit: 3,               // identical action signature executed this many times -> stop/replan
   confirm: true,                    // AURA_JV_CONFIRM ('0' = refuse consequential instead of asking)
   finalVerify: true,                // AURA_JV_FINAL_VERIFY ('0' skips the task_done call)
+  finalPolls: 2,                    // AURA_JV_FINAL_POLLS, max task_done calls while the screen keeps changing
+  frameSkip: true,                  // AURA_JV_FRAME_SKIP ('0' = always call Jev, even on an unchanged screen)
   plannerModel: 'gemini-3.6-flash', // AURA_PLANNER_MODEL
   plannerTimeoutMs: 12000,          // AURA_PLANNER_TIMEOUT_MS, whole planner budget incl. hedges
   plannerHedgeMs: 2500,             // AURA_PLANNER_HEDGE_MS, start a parallel identical request after this
@@ -53,7 +55,7 @@ const DEFAULT_VISION_CFG = Object.freeze({
 
 const CLICK_OPS = ['click', 'double_click', 'right_click'];
 const HOTKEY_RE = /^[a-z0-9]+(\+[a-z0-9]+)*$/i;
-const CONSEQUENTIAL_RE = /\b(send|delete|remove|erase|purchase|buy|order|pay|checkout|submit|publish|post|tweet|transfer|uninstall|format|sign ?out|log ?out|shut ?down|restart)\b/i;
+const CONSEQUENTIAL_RE = /\b(send|delete|remove|erase|recycle|trash|bin|purchase|buy|order|pay|checkout|submit|publish|post|tweet|transfer|uninstall|format|sign ?out|log ?out|shut ?down|restart)\b/i;
 const STEP_SOURCES = ['trivial', 'gemini', 'replan'];
 const MAX_STEPS = 12;
 
@@ -118,6 +120,8 @@ function readVisionConfig(env = {}) {
     sameActionLimit: envNumber(env, 'AURA_JV_SAME_ACTION_LIMIT', d.sameActionLimit, { min: 1, integer: true }),
     confirm: envBool(env, 'AURA_JV_CONFIRM', d.confirm),
     finalVerify: envBool(env, 'AURA_JV_FINAL_VERIFY', d.finalVerify),
+    finalPolls: envNumber(env, 'AURA_JV_FINAL_POLLS', d.finalPolls, { clamp: true, min: 1, max: 5 }),
+    frameSkip: envBool(env, 'AURA_JV_FRAME_SKIP', d.frameSkip),
     plannerModel: envString(env, 'AURA_PLANNER_MODEL', d.plannerModel),
     plannerTimeoutMs: envNumber(env, 'AURA_PLANNER_TIMEOUT_MS', d.plannerTimeoutMs, { min: 1, integer: true }),
     plannerHedgeMs: envNumber(env, 'AURA_PLANNER_HEDGE_MS', d.plannerHedgeMs, { min: 0, integer: true }),
@@ -196,6 +200,16 @@ function isClickOp(op) {
 
 const MAX_URL_LEN = 2000;
 
+// [x, y] fractions inside a box, each clamped to 0..1; null when not two finite numbers.
+function fractionPair(v) {
+  if (!Array.isArray(v) || v.length !== 2) return null;
+  const a = Number(v[0]);
+  const b = Number(v[1]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  const c = (n) => Math.round(Math.min(1, Math.max(0, n)) * 1000) / 1000;
+  return [c(a), c(b)];
+}
+
 /** Normalized href for an http(s) URL, or null. Anything else (file:, javascript:, ...) is rejected. */
 function parseHttpUrl(raw) {
   const text = collapse(raw);
@@ -226,7 +240,7 @@ function validatePlan(raw) {
     if (!rawStep || typeof rawStep !== 'object') return { ok: false, error: `${at}: not an object` };
 
     const op = typeof rawStep.op === 'string' ? rawStep.op : '';
-    if (['click', 'double_click', 'right_click', 'type', 'hotkey', 'scroll', 'open_app', 'open_url', 'wait'].indexOf(op) === -1) {
+    if (['click', 'double_click', 'right_click', 'drag', 'type', 'hotkey', 'scroll', 'open_app', 'open_url', 'wait'].indexOf(op) === -1) {
       return { ok: false, error: `${at}: bad op "${op}"` };
     }
 
@@ -238,7 +252,26 @@ function validatePlan(raw) {
 
     if (isClickOp(op) && !step.target) return { ok: false, error: `${at}: target required for ${op}` };
 
-    if (op === 'type') {
+    if (op === 'drag') {
+      const tf = rawStep.target_from !== undefined ? cleanTarget(rawStep.target_from) : '';
+      const tt = rawStep.target_to !== undefined ? cleanTarget(rawStep.target_to) : '';
+      if (tf || tt) {
+        if (!tf || !tt) return { ok: false, error: `${at}: drag needs both target_from and target_to` };
+        delete step.target;
+        step.target_from = tf;
+        step.target_to = tt;
+      } else {
+        if (!step.target) return { ok: false, error: `${at}: drag needs a target (or target_from and target_to)` };
+        const noPoints = (rawStep.from === undefined || (Array.isArray(rawStep.from) && !rawStep.from.length)) &&
+          (rawStep.to === undefined || (Array.isArray(rawStep.to) && !rawStep.to.length));
+        // No points at all means "drag across the area" (a shape tool: corner to corner).
+        const from = noPoints ? [0.25, 0.25] : fractionPair(rawStep.from);
+        const to = noPoints ? [0.75, 0.75] : fractionPair(rawStep.to);
+        if (!from || !to) return { ok: false, error: `${at}: drag needs from and to as [x,y] fractions` };
+        step.from = from;
+        step.to = to;
+      }
+    } else if (op === 'type') {
       const text = cleanString(rawStep.text);
       if (text.length < 1 || text.length > 500) return { ok: false, error: `${at}: text must be 1..500 chars` };
       step.text = text;
@@ -301,12 +334,28 @@ function normalizeKeys(text) {
     .toLowerCase();
 }
 
+const NAMED_KEYS = new Set(['ctrl', 'control', 'shift', 'alt', 'win', 'windows', 'enter', 'return', 'esc', 'escape', 'tab', 'space',
+  'backspace', 'delete', 'del', 'home', 'end', 'pageup', 'pagedown', 'up', 'down', 'left', 'right', 'insert',
+  'printscreen', 'capslock', 'menu', 'plus', 'minus']);
+
+// Every token is a single character, a named key or F1..F24.
+function isKnownKeyCombo(keys) {
+  const parts = String(keys).split('+');
+  return parts.length > 0 && parts.every(p => p.length === 1 || NAMED_KEYS.has(p) || /^f([1-9]|1\d|2[0-4])$/.test(p));
+}
+
 /**
  * Cheap pre-router for single-clause commands. Returns a Plan(source 'trivial')
- * or null when the command needs the Gemini planner.
+ * or null when the command needs the Gemini planner. Anything with unknown
+ * trailing words goes to the planner instead of being guessed: "open X" only
+ * shortcuts when `opts.appKnown(name)` says the app resolves (when no checker
+ * is given any name is accepted), a click target is at most 8 words, and press
+ * accepts only real key names.
+ * @param {string} text
+ * @param {{appKnown?: (name:string)=>boolean}} [opts]
  * @returns {{steps:object[],source:string}|null}
  */
-function parseTrivialCommand(text) {
+function parseTrivialCommand(text, opts = {}) {
   const raw = String(text == null ? '' : text).trim();
   if (!raw || !isSingleClause(raw)) return null;
 
@@ -314,6 +363,11 @@ function parseTrivialCommand(text) {
   if (m) {
     const app = cleanString(m[1]);
     if (!app) return null;
+    if (typeof opts.appKnown === 'function') {
+      let known = false;
+      try { known = !!opts.appKnown(app); } catch { known = false; }
+      if (!known) return null;
+    }
     return { steps: [{ op: 'open_app', app, done_when: '' }], source: 'trivial' };
   }
 
@@ -322,14 +376,14 @@ function parseTrivialCommand(text) {
     const verb = m[1].toLowerCase().replace(/\s+/g, '-');
     const op = verb === 'double-click' ? 'double_click' : verb === 'right-click' ? 'right_click' : 'click';
     const target = cleanTarget(m[2]);
-    if (!target) return null;
+    if (!target || target.split(' ').length > 8) return null;
     return { steps: [{ op, target, done_when: '' }], source: 'trivial' };
   }
 
   m = /^press\s+(.+)$/i.exec(raw);
   if (m) {
-    const keys = normalizeKeys(m[1]);
-    if (HOTKEY_RE.test(keys) && keys.length <= 40) {
+    const keys = normalizeKeys(m[1].replace(/\s+(keys?|button)$/i, ''));
+    if (HOTKEY_RE.test(keys) && keys.length <= 40 && isKnownKeyCombo(keys)) {
       return { steps: [{ op: 'hotkey', keys, done_when: '' }], source: 'trivial' };
     }
     return null;
@@ -357,7 +411,7 @@ function parseTrivialCommand(text) {
 function isConsequential(step) {
   if (step.risky === true) return true;
   if (step.op === 'type' && step.submit !== true) return false;
-  const hay = [step.target, step.text, step.app].filter(Boolean).join(' ');
+  const hay = [step.target, step.target_from, step.target_to, step.text, step.app].filter(Boolean).join(' ');
   return CONSEQUENTIAL_RE.test(hay);
 }
 
@@ -386,6 +440,9 @@ function describeStep(step) {
   switch (step.op) {
     case 'click': return `click "${t}"`;
     case 'double_click': return `double-click "${t}"`;
+    case 'drag':
+      if (step.target_from) return `drag "${sanitizeText(step.target_from, 60)}" to "${sanitizeText(step.target_to, 60)}"`;
+      return `drag on "${t}"`;
     case 'right_click': return `right-click "${t}"`;
     case 'type': {
       const txt = sanitizeText(step.text, 40);
@@ -430,7 +487,7 @@ function eligibleElements(snap, display, maxN) {
 /** A step needs a target grounded when it clicks, or types/scolls into a named field. */
 function stepNeedsGround(step) {
   if (!step) return false;
-  if (isClickOp(step.op)) return true;
+  if (isClickOp(step.op) || step.op === 'drag') return true;
   if ((step.op === 'type' || step.op === 'scroll') && !!step.target) return true;
   return false;
 }
@@ -459,7 +516,41 @@ function buildVisionRequest(ctx) {
     };
   }
 
-  if (ground) {
+  const isDrag = !!(step && step.op === 'drag');
+  const twoBox = isDrag && !!step.target_from;
+  let dragSpec = null;
+
+  if (ground && isDrag) {
+    // One Jev call locates everything the drag needs: either one area (the
+    // from/to fractions are applied inside its box) or two boxes.
+    if (twoBox) {
+      const a = sanitizeText(step.target_from, 200);
+      const b = sanitizeText(step.target_to, 200);
+      questions.visible = {
+        type: 'noul',
+        instructions: `Are both ${a} and ${b} visible and not covered in \`screenshot\`?`,
+      };
+      questions.target = { type: 'box', instructions: `Locate ${a} in \`screenshot\`. Box only that control, tightly.` };
+      questions.target_to = { type: 'box', instructions: `Locate ${b} in \`screenshot\`. Box only that control, tightly.` };
+    } else {
+      const target = sanitizeText(step.target, 200);
+      questions.visible = {
+        type: 'noul',
+        instructions: `Is ${target} visible and not covered in \`screenshot\`?`,
+      };
+      questions.target = { type: 'box', instructions: `Locate ${target} in \`screenshot\`. Box the whole area.` };
+      dragSpec = { from: step.from, to: step.to };
+    }
+    questions.blocked = {
+      type: 'noul',
+      instructions: 'Is an unexpected dialog, error, sign-in or permission prompt, or loading screen covering `screenshot`?',
+    };
+    const dragWhat = twoBox ? `${sanitizeText(step.target_from, 120)} onto ${sanitizeText(step.target_to, 120)}` : sanitizeText(step.target, 200);
+    questions.risky = {
+      type: 'noul',
+      instructions: `Would dragging ${dragWhat} delete, send, buy, publish, move to the recycle bin or do something hard to undo?`,
+    };
+  } else if (ground) {
     const target = sanitizeText(step.target, 200);
     questions.visible = {
       type: 'noul',
@@ -496,9 +587,18 @@ function buildVisionRequest(ctx) {
   }
 
   if (final) {
+    // Lenient on purpose: the question names the last action and what it should
+    // have produced, so a finished task is not judged against the bare instruction.
+    const last = ctx.lastStep;
+    let tail = '';
+    if (last) {
+      tail = ` The last action was: ${sanitizeText(describeStep(last), 120)}.`;
+      if (last.done_when) tail += ` It should have produced: ${sanitizeText(last.done_when, 160)}.`;
+      tail += ' Answer yes if the screen shows the result of the requested action.';
+    }
     questions.task_done = {
       type: 'noul',
-      instructions: `Judging only by \`screenshot\`, is \`${state.task}\` fully complete?`,
+      instructions: `Judging only by \`screenshot\`, has the request \`${state.task}\` been carried out?${tail}`,
     };
   }
 
@@ -512,7 +612,8 @@ function buildVisionRequest(ctx) {
     questions,
     elementMap,
     ref: SCREEN_REF,
-    flags: { verify: verifyQ, ground, final: !!final, riskyAsked: !!questions.risky },
+    flags: { verify: verifyQ, ground, final: !!final, riskyAsked: !!questions.risky, drag: isDrag, drag2: twoBox },
+    dragSpec,
   };
 }
 
@@ -549,9 +650,9 @@ function readNoul(answers, key, asked) {
   return a.noul;
 }
 
-function parseBoxAnswer(answers, asked, cfg) {
+function parseBoxAnswer(answers, asked, cfg, key = 'target', maxArea = cfg.thresholds.boxMaxArea) {
   if (!asked) return { box: null, boxReject: null };
-  const a = answers && answers.target;
+  const a = answers && answers[key];
   if (!a || a.type !== 'box' || !a.box) return { box: null, boxReject: 'invalid' };
   const { top, bottom, left, right } = a.box;
   const vals = [top, bottom, left, right];
@@ -561,7 +662,7 @@ function parseBoxAnswer(answers, asked, cfg) {
 
   const box = { left, top, right, bottom, confidence: a.confidence };
   const area = (right - left) * (bottom - top);
-  if (area > cfg.thresholds.boxMaxArea) return { box, boxReject: 'too_large' };
+  if (area > maxArea) return { box, boxReject: 'too_large' };
   if (a.confidence < cfg.thresholds.boxConf) return { box, boxReject: 'low_conf' };
   return { box, boxReject: null };
 }
@@ -618,7 +719,9 @@ function interpretVisionAnswers(answers, built, display, cfg) {
     return { ...base, ok: false, reason: 'bad_answer' };
   }
 
-  const { box, boxReject } = parseBoxAnswer(answers, asked.ground, cfg);
+  // A drag over an area (a canvas, a slider track) may box far more than a control.
+  const { box, boxReject } = parseBoxAnswer(answers, asked.ground, cfg, 'target',
+    asked.drag && !asked.drag2 ? 0.95 : undefined);
   const element = parseElementAnswer(answers, built, cfg);
   if (element && element.bad) return { ...base, ok: false, reason: 'bad_answer' };
 
@@ -636,6 +739,33 @@ function interpretVisionAnswers(answers, built, display, cfg) {
   }
 
   const usableBox = box && !boxReject ? box : null;
+
+  if (asked.drag) {
+    let p1 = null;
+    let p2 = null;
+    if (asked.drag2) {
+      const second = parseBoxAnswer(answers, true, cfg, 'target_to');
+      if (usableBox && second.box && !second.boxReject) {
+        p1 = boxCenterToNormalized(usableBox);
+        p2 = boxCenterToNormalized(second.box);
+      } else if (!out.boxReject && second.boxReject) {
+        out.boxReject = 'to_' + second.boxReject;
+      }
+    } else if (usableBox && built.dragSpec) {
+      const at = (f) => ({
+        nx: Math.min(999, Math.max(0, (usableBox.left + f[0] * (usableBox.right - usableBox.left)) * 1000)),
+        ny: Math.min(999, Math.max(0, (usableBox.top + f[1] * (usableBox.bottom - usableBox.top)) * 1000)),
+      });
+      p1 = at(built.dragSpec.from);
+      p2 = at(built.dragSpec.to);
+    }
+    if (p1 && p2) {
+      out.click = { source: 'box', nx: p1.nx, ny: p1.ny, nx2: p2.nx, ny2: p2.ny };
+      out.clickReason = 'drag';
+    }
+    return out;
+  }
+
   const el = element || null;
   const elCenter = el ? elementCenterToNormalized(built.elementMap[el.id], display) : null;
 
@@ -672,6 +802,7 @@ function interpretVisionAnswers(answers, built, display, cfg) {
 function actionSignature(step, click) {
   const parts = [step.op];
   if (click) parts.push(`@${Math.round(click.nx / 20)},${Math.round(click.ny / 20)}`);
+  if (click && click.nx2 !== undefined) parts.push(`>${Math.round(click.nx2 / 20)},${Math.round(click.ny2 / 20)}`);
   if (step.op === 'type') parts.push(step.text || '');
   if (step.op === 'hotkey') parts.push(step.keys || '');
   if (step.op === 'open_app') parts.push(step.app || '');
@@ -680,7 +811,62 @@ function actionSignature(step, click) {
   return parts.join('|');
 }
 
+// Cheap picture of a frame for "did anything change" checks: a 48x27 luma grid.
+// `bgra` is a 48x27 bitmap (Electron nativeImage.resize().toBitmap()).
+const SIG_W = 48;
+const SIG_H = 27;
+function lumaSignature(bgra) {
+  const n = SIG_W * SIG_H;
+  if (!bgra || bgra.length < n * 4) return null;
+  const sig = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    sig[i] = (bgra[o + 2] * 77 + bgra[o + 1] * 150 + bgra[o] * 29) >> 8;
+  }
+  return sig;
+}
+
+/**
+ * True when two signatures show the same screen. A blinking caret or a ticking
+ * clock moves a few cells by a few levels; real changes (page load, dialog,
+ * typed text) move many or a lot, so only a handful of mildly different cells
+ * still count as unchanged.
+ */
+// Full-sensitivity check of the cells around a point (nx, ny in 0..999): any cell
+// moving more than a few levels counts as a change (a toggle or checkbox repaint
+// is only a few cells and a few levels, which sameFrame deliberately tolerates).
+function sameRegion(a, b, nx, ny, pad = 0.08, cellDelta = 6) {
+  if (!a || !b || a.length !== b.length || a.length !== SIG_W * SIG_H) return false;
+  const cx = nx / 1000;
+  const cy = ny / 1000;
+  const c0 = Math.max(0, Math.floor((cx - pad) * SIG_W));
+  const c1 = Math.min(SIG_W - 1, Math.ceil((cx + pad) * SIG_W));
+  const r0 = Math.max(0, Math.floor((cy - pad) * SIG_H));
+  const r1 = Math.min(SIG_H - 1, Math.ceil((cy + pad) * SIG_H));
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const i = r * SIG_W + c;
+      if (Math.abs(a[i] - b[i]) > cellDelta) return false;
+    }
+  }
+  return true;
+}
+
+function sameFrame(a, b, maxCells = 4, cellDelta = 16) {
+  if (!a || !b || a.length !== b.length) return false;
+  let changed = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs(a[i] - b[i]) > cellDelta && ++changed > maxCells) return false;
+  }
+  return true;
+}
+
 module.exports = {
+  lumaSignature,
+  sameFrame,
+  sameRegion,
+  SIG_W,
+  SIG_H,
   DEFAULT_VISION_CFG,
   readVisionConfig,
   IMAGE_LIMITS,

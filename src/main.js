@@ -11,7 +11,7 @@ const { resolveJevKey, resolveGeminiKey } = require('./env-keys');
 const { runVisionTask } = require('./jev-vision-runner');
 const { planTask, replanTask } = require('./jev-planner');
 const { primaryDisplayInfo, capturePrimaryJpeg, warmCapture, setCaptureLogger } = require('./screen-capture');
-const { readVisionConfig } = require('./jev-vision');
+const { readVisionConfig, lumaSignature, SIG_W, SIG_H } = require('./jev-vision');
 
 let mainWindow = null;
 let dashboardWindow = null;
@@ -927,6 +927,18 @@ function refocusHwnd(hwnd) {
   ).catch(() => {});
 }
 
+// 48x27 luma grid of a JPEG for the runner's unchanged-screen check; null on any failure.
+function frameSignature(jpeg) {
+  try {
+    const small = nativeImage.createFromBuffer(jpeg).resize({ width: SIG_W, height: SIG_H, quality: 'good' });
+    const size = small.getSize();
+    if (size.width !== SIG_W || size.height !== SIG_H) return null;
+    return lumaSignature(small.toBitmap());
+  } catch {
+    return null;
+  }
+}
+
 function plannerTuning(cfg) {
   return {
     hedgeMs: cfg.plannerHedgeMs,
@@ -965,7 +977,12 @@ function visionDeps(bundle, ctl, controller) {
   const { jevKey, plannerKey, cfg } = bundle;
   let targetHwnd = null; // window of the most recent UIA snapshot
   return {
-    capture: () => capturePrimaryJpeg({ maxSide: cfg.imgMaxSide, quality: cfg.jpegQuality, fast: cfg.fastCapture }),
+    capture: async () => {
+      const r = await capturePrimaryJpeg({ maxSide: cfg.imgMaxSide, quality: cfg.jpegQuality, fast: cfg.fastCapture });
+      if (r && r.ok && cfg.frameSkip) r.sig = frameSignature(r.jpeg); // lets the runner skip Jev on an unchanged screen
+      return r;
+    },
+    appKnown: (name) => automation.isKnownApp(name),
     uiaSnapshot: async () => {
       const snap = await uia.uiaSnapshot({
         excludePid: process.pid,
@@ -1003,7 +1020,8 @@ function visionDeps(bundle, ctl, controller) {
     }) : null,
     replan: plannerKey ? (args) => replanTask({
       key: plannerKey, instruction: args.instruction, done: args.done,
-      failed: args.failed, screen: args.screen, model: cfg.plannerModel,
+      failed: args.failed, screen: args.screen, image: args.image, jev: args.jev, mode: args.mode,
+      model: cfg.plannerModel,
       timeoutMs: cfg.plannerTimeoutMs, signal: controller.signal, ...plannerTuning(cfg),
     }) : null,
     confirm: async (text) => {

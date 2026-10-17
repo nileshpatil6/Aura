@@ -6,10 +6,16 @@
 const {
   parseTrivialCommand, buildVisionRequest, interpretVisionAnswers, describeStep,
   actionSignature, isConsequential, sanitizeText, SCREEN_REF, describeElement,
-  stepNeedsGround, isClickOp, boxCenterToNormalized, isRiskyHotkey,
+  stepNeedsGround, isClickOp, boxCenterToNormalized, isRiskyHotkey, sameFrame, sameRegion,
 } = require('./jev-vision');
 
 const TIMEOUT_MARK = Symbol('uia-grace-timeout');
+
+// Final verdict thresholds that are not part of the Jev threshold table:
+// below SURE_NOT_DONE the screen clearly does not show the result; below
+// LIKELY_NOT_DONE an unverified last step is not trusted either.
+const SURE_NOT_DONE = 0.05;
+const LIKELY_NOT_DONE = 0.3;
 
 function graceRace(promise, ms) {
   return new Promise((resolve) => {
@@ -50,6 +56,15 @@ async function runVisionTask(instruction, deps, cfg) {
     jevCalls: 0,
     replans: 0,
     plannerMs: 0,
+    lastAsk: null,           // { key, sig, obs } of the newest real Jev answer, for the unchanged-screen skip
+    unchangedRun: 0,         // consecutive observations answered from lastAsk
+    lastSeenSig: null,       // signature of the newest captured frame
+    sigBeforeAction: null,   // lastSeenSig when the newest action started
+    lastCap: null,
+    lastRead: null,
+    verifyReal: 0,           // real (non-skipped) Jev answers for the pending verify
+    forceReal: false,        // next observation must call Jev even on an unchanged frame
+    droppedUnverified: false, // a continue replan replaced a last step whose check never passed
   };
   let prefetched = null;
   let pollCount = 0;
@@ -62,7 +77,7 @@ async function runVisionTask(instruction, deps, cfg) {
     log(`[jv] end ${status} actions=${state.actions} calls=${state.jevCalls} replans=${state.replans} ` +
       `planner=${Math.round(state.plannerMs)} total=${total}`);
     const result = {
-      ok: status === 'done' || status === 'unverified',
+      ok: status === 'done' || status === 'done_unconfirmed' || status === 'unverified',
       status,
       summary,
       actions: state.actions,
@@ -89,7 +104,7 @@ async function runVisionTask(instruction, deps, cfg) {
   function logJev(obs, outcome) {
     const { read, step, final, cap, snap, uiaStatus, jevMs } = obs;
     const op = step ? step.op : (final ? 'final' : 'verify');
-    const target = step && step.target ? sanitizeText(step.target, 40) : '';
+    const target = step && (step.target || step.target_from) ? sanitizeText(step.target || step.target_from, 40) : '';
     const box = read.box
       ? `[${read.box.left.toFixed(2)},${read.box.top.toFixed(2)},${read.box.right.toFixed(2)},${read.box.bottom.toFixed(2)}]@${read.box.confidence.toFixed(2)}`
       : '-';
@@ -97,7 +112,7 @@ async function runVisionTask(instruction, deps, cfg) {
     const eCount = snap && Array.isArray(snap.elements) ? snap.elements.length : 0;
     const kb = Math.round(cap.jpeg.length / 1024);
     log(`[jv] #${state.jevCalls} s${state.i + 1}/${state.plan.steps.length} ${op} "${target}" ` +
-      `cap=${cap.ms} ${cap.width}x${cap.height} ${kb}KB uia=${uiaStatus}(e=${eCount}) jev=${jevMs} | ` +
+      `cap=${cap.ms} ${cap.width}x${cap.height} ${kb}KB uia=${uiaStatus}(e=${eCount}) jev=${obs.unchanged ? 'same-frame' : jevMs} | ` +
       `prev=${fmtNum(read.prevDone)} vis=${fmtNum(read.visible)} box=${box} el=${el} ` +
       `blk=${fmtNum(read.blocked)} risky=${fmtNum(read.risky)} done=${fmtNum(read.taskDone)} -> ${outcome}`);
   }
@@ -107,7 +122,14 @@ async function runVisionTask(instruction, deps, cfg) {
     return h.length ? `Done: ${h.join('; ')}` : 'Done.';
   }
 
-  async function observe({ step, verifyStep, ground, final }) {
+  // Identifies WHICH question set an observation asks, so an answer is only
+  // reused for the same pending step, not across steps.
+  function askKey({ step, ground, final }) {
+    const v = state.pendingVerify && state.pendingVerify.step.done_when ? `v${state.pendingVerify.index}` : '';
+    return `${ground && step ? `g${state.i}` : ''}|${v}|${final ? 'f' : ''}`;
+  }
+
+  async function observe({ step, verifyStep, ground, final, lastStep, clickAt }) {
     let cap;
     if (prefetched) { cap = prefetched; prefetched = null; }
     else {
@@ -117,10 +139,28 @@ async function runVisionTask(instruction, deps, cfg) {
     }
     if (deps.signal.aborted) return { aborted: true };
     if (!cap || !cap.ok) return { fatal: true, error: 'capture failed: ' + ((cap && cap.error) || 'unknown') };
+    state.lastCap = cap;
+
+    // Unchanged screen for the same question: the answer cannot differ, so do
+    // not call Jev (or UIA) again. It counts as a repeated answer.
+    const sig = cfg.frameSkip && cap.sig ? cap.sig : null;
+    if (sig) state.lastSeenSig = sig;
+    const key = askKey({ step, ground, final });
+    // Always compared with the frame Jev actually answered, never with the previous
+    // poll, so a slow change cannot hide. After a click the area around the click is
+    // also compared at full sensitivity: a toggle repaint is a few cells and levels.
+    const forced = state.forceReal;
+    state.forceReal = false;
+    if (!forced && sig && state.lastAsk && state.lastAsk.key === key && sameFrame(state.lastAsk.sig, sig) &&
+        (!clickAt || sameRegion(state.lastAsk.sig, sig, clickAt.nx, clickAt.ny))) {
+      state.unchangedRun++;
+      return { ...state.lastAsk.obs, cap, unchanged: true };
+    }
+    state.unchangedRun = 0;
 
     let snap = null;
     let uiaStatus = 'off';
-    if (ground && cfg.uia && !state.uiaOff) {
+    if (ground && cfg.uia && !state.uiaOff && !(step && step.op === 'drag')) {
       const p = Promise.resolve().then(() => deps.uiaSnapshot());
       p.then((r) => { if (r && r.ok === false && r.reason === 'timeout') state.uiaOff = true; }, () => {});
       const uiaStart = deps.now();
@@ -139,7 +179,7 @@ async function runVisionTask(instruction, deps, cfg) {
     const display = deps.display();
     let built;
     try {
-      built = buildVisionRequest({ task, step: ground ? step : null, verify: verifyStep, final, snap, display, cfg });
+      built = buildVisionRequest({ task, step: ground ? step : null, verify: verifyStep, final, snap, display, cfg, lastStep });
     } catch (e) {
       return { fatal: true, error: String((e && e.message) || e) };
     }
@@ -166,7 +206,10 @@ async function runVisionTask(instruction, deps, cfg) {
     }
 
     if (snap) state.lastSnap = snap;
-    return { ok: true, read, built, snap, cap, display, uiaStatus, jevMs: jr.ms, step, final: !!final };
+    state.lastRead = read;
+    const result = { ok: true, read, built, snap, cap, display, uiaStatus, jevMs: jr.ms, step, final: !!final };
+    if (sig) state.lastAsk = { key, sig, obs: result };
+    return result;
   }
 
   async function actClick(step, click, built, read) {
@@ -201,6 +244,8 @@ async function runVisionTask(instruction, deps, cfg) {
     const start = deps.now();
     let via = 'key';
     let outcome = 'ok';
+    state.lastAsk = null;                      // the screen is about to change
+    state.sigBeforeAction = state.lastSeenSig;
 
     if (isClickOp(step.op)) {
       const res = await actClick(step, click, built, read);
@@ -208,6 +253,11 @@ async function runVisionTask(instruction, deps, cfg) {
       via = res.via;
       outcome = res.outcome;
       if (outcome === 'no_target') return { via, outcome };
+    } else if (step.op === 'drag') {
+      if (!click || click.nx2 === undefined) return { via: 'box', outcome: 'no_target' };
+      // computerAction drags with the mouse down, 20 intermediate moves, mouse up.
+      await deps.input({ action: 'drag', nx: click.nx, ny: click.ny, nx2: click.nx2, ny2: click.ny2 });
+      via = 'drag';
     } else if (step.op === 'type') {
       if (click) {
         const res = await actClick(step, click, built, read);
@@ -259,14 +309,27 @@ async function runVisionTask(instruction, deps, cfg) {
 
     await deps.sleep(cfg.settleMs);
     if (deps.signal.aborted) return { aborted: true };
-    state.pendingVerify = { step, index: state.i, actedAt: deps.now() };
+    state.pendingVerify = {
+      step, index: state.i, actedAt: deps.now(),
+      at: click && Number.isFinite(click.nx) ? { nx: click.nx, ny: click.ny } : null,
+    };
+    state.verifyReal = 0;
     state.i++;
     pollCount = 0;
     return { via, outcome };
   }
 
-  async function doReplan(reason, failedStep) {
-    if (state.replans >= cfg.maxReplans || !deps.replan) return { done: finish('failed', reason) };
+  /**
+   * Ask the planner for the next steps, with the screen as it is now.
+   * mode 'fail': a step failed or could not be verified; steps from the failure on are replaced.
+   * mode 'continue': every step ran but the task is not done; new steps are appended.
+   * Returns { ok } (steps spliced in), { complete } (continue mode, planner says finished)
+   * or { done: RunResult } (run over). In continue mode a planner failure is { soft }.
+   */
+  async function doReplan(reason, failedStep, mode = 'fail') {
+    if (state.replans >= cfg.maxReplans || !deps.replan) {
+      return mode === 'continue' ? { soft: true } : { done: finish('failed', reason) };
+    }
     state.replans++;
     progress({ phase: 'replan', index: state.i + 1, desc: reason });
     const done = state.history.slice(-8);
@@ -275,19 +338,33 @@ async function runVisionTask(instruction, deps, cfg) {
       process: state.lastSnap.process,
       elements: (state.lastSnap.elements || []).slice(0, 30).map(describeElement),
     } : null;
-    const rr = await deps.replan({
-      instruction,
-      done,
-      failed: { step: failedStep || state.plan.steps[state.i], reason },
-      screen,
-    });
+
+    // Fresh frame so the planner sees what the user sees right now.
+    let image = null;
+    try {
+      const raw = await deps.capture();
+      if (raw && raw.ok) { image = raw.jpeg; if (raw.sig) state.lastSeenSig = raw.sig; }
+    } catch { /* fall back to the last observed frame */ }
+    if (!image && state.lastCap) image = state.lastCap.jpeg;
+    if (deps.signal.aborted) return { done: finish('cancelled', 'Cancelled') };
+
+    const rd = state.lastRead;
+    const jev = rd ? {
+      vis: rd.visible, boxConf: rd.box ? rd.box.confidence : null, prevDone: rd.prevDone, taskDone: rd.taskDone,
+    } : null;
+    const failed = mode === 'continue' ? null : { step: failedStep || state.plan.steps[state.i], reason };
+    const rr = await deps.replan({ instruction, done, failed, screen, image, jev, mode });
     if (deps.signal.aborted) return { done: finish('cancelled', 'Cancelled') };
     state.plannerMs += (rr && rr.ms) || 0;
+    if (rr && rr.ok && rr.plan && rr.plan.complete && mode === 'continue') return { complete: true };
     if (!rr || !rr.ok || !rr.plan || !rr.plan.steps || !rr.plan.steps.length) {
-      return { done: finish('failed', reason) };
+      return mode === 'continue' ? { soft: true } : { done: finish('failed', reason) };
     }
+    // A continue replan replaces a last step whose check never passed; remember it.
+    if (mode === 'continue' && state.pendingVerify && state.pendingVerify.step.done_when) state.droppedUnverified = true;
     state.plan = { steps: [...state.plan.steps.slice(0, state.i), ...rr.plan.steps], source: 'replan' };
     state.pendingVerify = null;
+    state.lastAsk = null;
     pollCount = 0;
     return { ok: true };
   }
@@ -316,7 +393,7 @@ async function runVisionTask(instruction, deps, cfg) {
   }
 
   // ---- Plan phase ------------------------------------------------------
-  const trivial = parseTrivialCommand(instruction);
+  const trivial = parseTrivialCommand(instruction, { appKnown: deps.appKnown });
   let plan;
   if (trivial) {
     plan = trivial;
@@ -344,169 +421,244 @@ async function runVisionTask(instruction, deps, cfg) {
   state.plan = plan;
 
   // ---- Step loop -------------------------------------------------------
-  while (state.i < state.plan.steps.length) {
-    const lim = checkLimits();
-    if (lim) return lim;
+  // Runs until the plan is exhausted (returns null) or the run ends (RunResult).
+  async function stepLoop() {
+    while (state.i < state.plan.steps.length) {
+      const lim = checkLimits();
+      if (lim) return lim;
 
-    const step = state.plan.steps[state.i];
-    const pending = state.pendingVerify;
-    const verifyStep = pending && pending.step.done_when ? pending.step : null;
-    const ground = stepNeedsGround(step);
+      const step = state.plan.steps[state.i];
+      const pending = state.pendingVerify;
+      const verifyStep = pending && pending.step.done_when ? pending.step : null;
+      const ground = stepNeedsGround(step);
 
-    progress({ phase: 'step', index: state.i + 1, total: state.plan.steps.length, desc: describeStep(step) });
+      progress({ phase: 'step', index: state.i + 1, total: state.plan.steps.length, desc: describeStep(step) });
 
-    if (!verifyStep && !ground) {
-      const r = await executeDirect(step);
-      if (r.aborted) return finish('cancelled', 'Cancelled');
-      if (r.error) return finish('error', r.error);
-      if (r.refused) return finish('refused', `Refused: ${describeStep(step)}`);
-      continue;
-    }
-
-    const obs = await observe({ step, verifyStep, ground, final: false });
-    if (obs.aborted) return finish('cancelled', 'Cancelled');
-    if (obs.fatal) return finish('error', obs.error);
-    if (obs.retry) continue;
-    const read = obs.read;
-
-    // Verify the previous step first; it gates whether we may act.
-    if (verifyStep) {
-      const pd = read.prevDone;
-      if (pd !== null && pd >= cfg.thresholds.prevDone) {
-        state.pendingVerify = null;
-        pollCount = 0;
-        logJev(obs, 'verified');
-      } else {
-        // Launching an app or a page takes seconds; give both the long window.
-        const launching = pending.step.op === 'open_app' || pending.step.op === 'open_url';
-        const exhausted = launching
-          ? deps.now() - pending.actedAt >= cfg.appWaitMs
-          : pollCount >= cfg.maxPolls;
-        if (!exhausted) {
-          pollCount++;
-          logJev(obs, 'poll');
-          await deps.sleep(cfg.pollIntervalMs);
-          if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
-          continue;
-        }
-        // Never re-execute type/hotkey/open_app/scroll (T15); those replan.
-        if (isClickOp(pending.step.op) && !state.retried.has(pending.index)) {
-          state.retried.add(pending.index);
-          state.pendingVerify = null;
-          state.i = pending.index;
-          pollCount = 0;
-          continue;
-        }
-        logJev(obs, 'replan');
-        const rp = await doReplan('not_verified', pending.step);
-        if (rp.done) return rp.done;
-        continue;
-      }
-    }
-
-    if (ground) {
-      if (read.click) {
-        const sig = actionSignature(step, read.click);
-        const n = (state.sigCounts.get(sig) || 0) + 1;
-        state.sigCounts.set(sig, n);
-        if (n >= cfg.sameActionLimit) {
-          logJev(obs, 'replan');
-          const rp = await doReplan('repeating', step);
-          if (rp.done) return rp.done;
-          continue;
-        }
-
-        const g = await gate(step, read);
-        if (g.aborted) return finish('cancelled', 'Cancelled');
-        if (g.refused) { logJev(obs, 'refused'); return finish('refused', `Refused: ${describeStep(step)}`); }
-
-        logJev(obs, read.clickReason);
-        const r = await executeStep(step, read.click, obs.built, read);
+      if (!verifyStep && !ground) {
+        const r = await executeDirect(step);
         if (r.aborted) return finish('cancelled', 'Cancelled');
         if (r.error) return finish('error', r.error);
-        if (r.outcome === 'no_target') {
-          if (pollCount < cfg.maxPolls) {
+        if (r.refused) return finish('refused', `Refused: ${describeStep(step)}`);
+        continue;
+      }
+
+      const clickAt = verifyStep && isClickOp(verifyStep.op) ? pending.at : null;
+      const obs = await observe({ step, verifyStep, ground, final: false, clickAt });
+      if (obs.aborted) return finish('cancelled', 'Cancelled');
+      if (obs.fatal) return finish('error', obs.error);
+      if (obs.retry) continue;
+      if (verifyStep && !obs.unchanged) state.verifyReal++;
+      const read = obs.read;
+
+      // One log line per observation: when the previous step verified and the
+      // same observation then grounds/acts, the line carries both outcomes.
+      let verified = false;
+      const note = (o) => (verified ? `verified+${o}` : o);
+
+      // Verify the previous step first; it gates whether we may act.
+      if (verifyStep) {
+        const pd = read.prevDone;
+        if (pd !== null && pd >= cfg.thresholds.prevDone) {
+          state.pendingVerify = null;
+          state.verifyReal = 0;
+          pollCount = 0;
+          verified = true;
+        } else {
+          // Launching an app or a page takes seconds; give both the long window.
+          const launching = pending.step.op === 'open_app' || pending.step.op === 'open_url';
+          // An unchanged screen repeats the same answer; two repeats end the wait early
+          // (launches keep their time window, their polls cost no Jev call).
+          // After a click, "unchanged" never ends the wait: a toggle that repaints late
+          // looks unchanged, and a retry would click it back. A click is only retried
+          // after maxPolls real Jev answers (a skipped poll is forced real if needed).
+          const clickVerify = isClickOp(pending.step.op);
+          let exhausted = launching
+            ? deps.now() - pending.actedAt >= cfg.appWaitMs
+            : clickVerify
+              ? pollCount >= cfg.maxPolls
+              : pollCount >= cfg.maxPolls || state.unchangedRun >= 2;
+          if (exhausted && clickVerify && state.verifyReal < cfg.maxPolls) {
+            exhausted = false;
+            state.forceReal = true;
+          }
+          if (!exhausted) {
             pollCount++;
+            logJev(obs, 'poll');
             await deps.sleep(cfg.pollIntervalMs);
             if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
             continue;
           }
-          const rp = await doReplan('target_not_found', step);
+          // Never re-execute type/hotkey/open_app/scroll (T15); those replan.
+          if (isClickOp(pending.step.op) && !state.retried.has(pending.index)) {
+            state.retried.add(pending.index);
+            state.pendingVerify = null;
+            state.i = pending.index;
+            pollCount = 0;
+            continue;
+          }
+          logJev(obs, 'replan');
+          const rp = await doReplan('not_verified', pending.step);
           if (rp.done) return rp.done;
+          continue;
         }
+      }
+
+      if (ground) {
+        if (read.click) {
+          const sig = actionSignature(step, read.click);
+          const n = (state.sigCounts.get(sig) || 0) + 1;
+          state.sigCounts.set(sig, n);
+          if (n >= cfg.sameActionLimit) {
+            logJev(obs, note('replan'));
+            const rp = await doReplan('repeating', step);
+            if (rp.done) return rp.done;
+            continue;
+          }
+
+          const g = await gate(step, read);
+          if (g.aborted) return finish('cancelled', 'Cancelled');
+          if (g.refused) { logJev(obs, note('refused')); return finish('refused', `Refused: ${describeStep(step)}`); }
+
+          logJev(obs, note(read.clickReason));
+          const r = await executeStep(step, read.click, obs.built, read);
+          if (r.aborted) return finish('cancelled', 'Cancelled');
+          if (r.error) return finish('error', r.error);
+          if (r.outcome === 'no_target') {
+            if (pollCount < cfg.maxPolls) {
+              pollCount++;
+              await deps.sleep(cfg.pollIntervalMs);
+              if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
+              continue;
+            }
+            const rp = await doReplan('target_not_found', step);
+            if (rp.done) return rp.done;
+          }
+          continue;
+        }
+
+        // Not grounded yet: poll, then replan. A second identical answer on an
+        // unchanged screen cannot improve, so it goes straight to the replan.
+        const blk = read.blocked;
+        const reason = blk !== null && blk >= cfg.thresholds.blocked ? 'obstructed' : 'target_not_found';
+        if (pollCount < cfg.maxPolls && state.unchangedRun < 1) {
+          pollCount++;
+          logJev(obs, note('poll'));
+          await deps.sleep(cfg.pollIntervalMs);
+          if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
+          continue;
+        }
+        logJev(obs, note('replan'));
+        const rp = await doReplan(reason, step);
+        if (rp.done) return rp.done;
         continue;
       }
 
-      // Not grounded yet: poll, then replan.
-      const blk = read.blocked;
-      const reason = blk !== null && blk >= cfg.thresholds.blocked ? 'obstructed' : 'target_not_found';
-      if (pollCount < cfg.maxPolls) {
-        pollCount++;
-        logJev(obs, 'poll');
-        await deps.sleep(cfg.pollIntervalMs);
-        if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
-        continue;
-      }
-      logJev(obs, 'replan');
-      const rp = await doReplan(reason, step);
-      if (rp.done) return rp.done;
+      // Verify passed (or there is nothing to verify) and the step needs no
+      // target: execute it now without another observation.
+      if (verified) logJev(obs, 'verified');
+      const direct = await executeDirect(step);
+      if (direct.aborted) return finish('cancelled', 'Cancelled');
+      if (direct.error) return finish('error', direct.error);
+      if (direct.refused) return finish('refused', `Refused: ${describeStep(step)}`);
       continue;
     }
-
-    // Verify passed (or there is nothing to verify) and the step needs no
-    // target: execute it now without another observation.
-    const direct = await executeDirect(step);
-    if (direct.aborted) return finish('cancelled', 'Cancelled');
-    if (direct.error) return finish('error', direct.error);
-    if (direct.refused) return finish('refused', `Refused: ${describeStep(step)}`);
-    continue;
+    return null;
   }
 
   // ---- Final -----------------------------------------------------------
-  let pending = state.pendingVerify;
-  let verifyStep = pending && pending.step.done_when ? pending.step : null;
+  // Returns a RunResult, or null when a "continue" replan added more steps.
+  async function finalPhase() {
+    const pending = state.pendingVerify;
+    const verifyStep = pending && pending.step.done_when ? pending.step : null;
+    const lastStep = pending ? pending.step : state.plan.steps[state.plan.steps.length - 1];
+    pollCount = 0;
 
-  if (!cfg.finalVerify) {
-    if (verifyStep) {
-      for (;;) {
-        const lim = checkLimits(true);
-        if (lim) return lim;
-        const obs = await observe({ step: null, verifyStep, ground: false, final: false });
-        if (obs.aborted) return finish('cancelled', 'Cancelled');
-        if (obs.fatal) return finish('error', obs.error);
-        if (obs.retry) continue;
-        const pd = obs.read.prevDone;
-        if (pd !== null && pd >= cfg.thresholds.prevDone) { logJev(obs, 'verified'); break; }
-        logJev(obs, 'poll');
-        if (pollCount >= cfg.maxPolls) return finish('unverified', 'Unverified');
-        pollCount++;
-        await deps.sleep(cfg.pollIntervalMs);
-        if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
+    if (!cfg.finalVerify) {
+      if (verifyStep) {
+        for (;;) {
+          const lim = checkLimits(true);
+          if (lim) return lim;
+          const obs = await observe({ step: null, verifyStep, ground: false, final: false });
+          if (obs.aborted) return finish('cancelled', 'Cancelled');
+          if (obs.fatal) return finish('error', obs.error);
+          if (obs.retry) continue;
+          const pd = obs.read.prevDone;
+          if (pd !== null && pd >= cfg.thresholds.prevDone) { logJev(obs, 'verified'); break; }
+          logJev(obs, 'poll');
+          if (pollCount >= cfg.maxPolls || state.unchangedRun >= 1) return finish('unverified', 'Unverified');
+          pollCount++;
+          await deps.sleep(cfg.pollIntervalMs);
+          if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
+        }
       }
+      return finish('done', doneSummary());
     }
-    return finish('done', doneSummary());
+
+    // At most cfg.finalPolls Jev calls; an unchanged screen cannot change the answer, so stop there.
+    // A last step that launches an app or a page gets the full launch window first:
+    // an unpainted window looks "unchanged", and acting on a half-loaded screen
+    // could open a duplicate.
+    const launching = !!pending && (pending.step.op === 'open_app' || pending.step.op === 'open_url');
+    let calls = 0;
+    let read = null;
+    for (;;) {
+      const lim = checkLimits(true);
+      if (lim) return lim;
+      const obs = await observe({ step: null, verifyStep, ground: false, final: true, lastStep });
+      if (obs.aborted) return finish('cancelled', 'Cancelled');
+      if (obs.fatal) return finish('error', obs.error);
+      if (obs.retry) continue;
+      read = obs.read;
+      const pdOk = read.prevDone !== null && read.prevDone >= cfg.thresholds.prevDone;
+      const tdOk = read.taskDone !== null && read.taskDone >= cfg.thresholds.taskDone;
+      if (pdOk || tdOk) {
+        state.pendingVerify = null;
+        logJev(obs, pdOk ? 'verified' : 'task_done');
+        return finish('done', doneSummary());
+      }
+      logJev(obs, obs.unchanged ? 'same-frame' : 'poll');
+      const waiting = launching && deps.now() - pending.actedAt < cfg.appWaitMs;
+      if (obs.unchanged) { if (!waiting) break; }
+      else {
+        calls++;
+        if (calls >= cfg.finalPolls && !waiting) break;
+      }
+      await deps.sleep(cfg.pollIntervalMs);
+      if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
+    }
+
+    // Not confirmed. Every step is verified unless the last one's check failed
+    // (earlier steps gate on theirs before the next one may run).
+    const allVerified = !verifyStep && !state.droppedUnverified;
+    const td = read && read.taskDone !== null ? read.taskDone : 0;
+    const screenChanged = !(state.sigBeforeAction && state.lastSeenSig && sameFrame(state.sigBeforeAction, state.lastSeenSig));
+    const canContinue = !!deps.replan && state.replans < cfg.maxReplans;
+    // Only the CURRENT last step's failed check argues for continuing; a dropped one is just remembered for the verdict.
+    const clearlyNotDone = (td < SURE_NOT_DONE && screenChanged) || (!!verifyStep && td < LIKELY_NOT_DONE);
+
+    if (clearlyNotDone && canContinue) {
+      const rp = await doReplan('not_complete', null, 'continue');
+      if (rp.done) return rp.done;
+      if (rp.ok) return null;
+      if (rp.complete) {
+        log('[jv] planner sees the task complete');
+        return allVerified ? finish('done_unconfirmed', doneSummary()) : finish('unverified', 'Unverified');
+      }
+      // soft failure: fall through to the verdict below
+    }
+
+    if (allVerified) {
+      log(`[jv] done_unconfirmed: all steps verified, task_done=${fmtNum(read && read.taskDone)}`);
+      return finish('done_unconfirmed', doneSummary());
+    }
+    return finish('unverified', 'Unverified');
   }
 
   for (;;) {
-    const lim = checkLimits(true);
-    if (lim) return lim;
-    const obs = await observe({ step: null, verifyStep, ground: false, final: true });
-    if (obs.aborted) return finish('cancelled', 'Cancelled');
-    if (obs.fatal) return finish('error', obs.error);
-    if (obs.retry) continue;
-    const read = obs.read;
-    const pdOk = read.prevDone !== null && read.prevDone >= cfg.thresholds.prevDone;
-    const tdOk = read.taskDone !== null && read.taskDone >= cfg.thresholds.taskDone;
-    if (pdOk || tdOk) {
-      state.pendingVerify = null;
-      logJev(obs, pdOk ? 'verified' : 'task_done');
-      return finish('done', doneSummary());
-    }
-    logJev(obs, 'poll');
-    if (pollCount >= cfg.maxPolls) return finish('unverified', 'Unverified');
-    pollCount++;
-    await deps.sleep(cfg.pollIntervalMs);
-    if (deps.signal.aborted) return finish('cancelled', 'Cancelled');
+    const stepped = await stepLoop();
+    if (stepped) return stepped;
+    const fin = await finalPhase();
+    if (fin) return fin;
   }
 }
 

@@ -280,6 +280,14 @@ function warmAppIndex() {
   if (!appIndex && !appIndexLoading && Date.now() - appIndexAt > APP_INDEX_REFRESH_MS) loadAppIndex();
 }
 
+/** True when open_app can resolve this name quickly: a built-in alias or a Start-menu index hit. */
+function isKnownApp(name) {
+  const key = String(name == null ? '' : name).toLowerCase().trim();
+  if (!key) return false;
+  if (APP_COMMANDS[key]) return true;
+  return !!(appIndex && lookupAppEntry(appIndex, name));
+}
+
 async function findIndexedApp(name) {
   if (process.env.AURA_APP_INDEX === '0') return null;
   if (!appIndex) return null; // not built yet: do not make the caller wait for it
@@ -692,7 +700,8 @@ module.exports = {
   lockScreen, sleepPc,
   shutdownAutomation,
   buildTypeScript, // exported for scripts/jev-vision-selftest.js
-  warmAppIndex, parseAppIndex, lookupAppEntry,
+  warmAppIndex, parseAppIndex, lookupAppEntry, isKnownApp,
+  __dragScript: buildDragScript,
   __appIndexTest: {
     setRunner(fn) { appIndexRunner = fn; },
     reset() { appIndex = null; appIndexAt = 0; appIndexLoading = null; },

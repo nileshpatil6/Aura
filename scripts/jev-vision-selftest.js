@@ -438,7 +438,7 @@ check('runner (b): open_app polls, then exact planner text typed once', async ()
 check('runner (c): target never visible -> polls, replan x2, failed', async () => {
   const step = { op: 'click', target: 'missing button', done_when: '' };
   const h = harness({
-    cfg: { uia: false },
+    cfg: { uia: false, maxReplans: 2 },
     plan: () => planResult([step]),
     replan: () => planResult([step], 'replan'),
     answerFn: (q) => (q.target ? groundAnswer({ visible: noul(0.1) }) : {}),
@@ -859,6 +859,452 @@ check('app index: failed or empty builds are not retried before the refresh inte
   assert.equal(builds, 1);
   t.setRunner(async () => ({ success: true, output: '' }));
   t.reset();
+});
+
+// ── round 3: unchanged-frame skip, done_unconfirmed, continue replans, drag, trivial router ──
+const { lumaSignature, sameFrame } = vision;
+const { replanTask } = require(path.join(__dirname, '..', 'src', 'jev-planner.js'));
+
+// Capture override whose frame signature comes from sigFn(callIndex); counts captures.
+function sigCapture(sigFn) {
+  const st = { n: 0 };
+  const fn = async () => { st.n++; return { ok: true, jpeg: Buffer.from('jpeg'), width: 1280, height: 720, ms: 5, sig: sigFn(st.n) }; };
+  return { fn, st };
+}
+const flat = (v) => new Uint8Array(48 * 27).fill(v);
+
+check('config: maxReplans default 5, finalPolls and frameSkip flags', () => {
+  const c = readVisionConfig({});
+  assert.equal(c.maxReplans, 5);
+  assert.equal(c.finalPolls, 2);
+  assert.equal(c.frameSkip, true);
+  assert.equal(readVisionConfig({ AURA_JV_FRAME_SKIP: '0' }).frameSkip, false);
+  assert.equal(readVisionConfig({ AURA_JV_MAX_REPLANS: '3' }).maxReplans, 3);
+});
+
+check('sameFrame: caret blink is the same screen, a dialog is not', () => {
+  const a = flat(200);
+  const blink = flat(200); blink[100] = 120; blink[101] = 130; // two cells change
+  const dialog = flat(200); for (let i = 0; i < 60; i++) dialog[300 + i] = 40;
+  assert.equal(sameFrame(a, blink), true);
+  assert.equal(sameFrame(a, dialog), false);
+  assert.equal(sameFrame(a, null), false);
+  const bgra = Buffer.alloc(48 * 27 * 4, 255);
+  assert.equal(lumaSignature(bgra).length, 48 * 27);
+  assert.equal(lumaSignature(bgra)[0], 255);
+  assert.equal(lumaSignature(Buffer.alloc(8)), null);
+});
+
+check('runner: unchanged screen -> second low-visibility answer is not asked again, straight to replan', async () => {
+  const cap = sigCapture(() => flat(100));
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    replan: { ok: false, error: 'x', ms: 1 },
+    answerFn: (q) => (q.target ? groundAnswer({ visible: noul(0.02), target: boxAns(0.4, 0.4, 0.6, 0.6, 0.1) }) : {}),
+  });
+  const r = await runVisionTask('click something', h.deps, h.cfg);
+  assert.equal(r.status, 'failed');
+  assert.equal(h.calls.jev, 1);
+  assert.equal(h.calls.replan, 1);
+  assert.ok(cap.st.n >= 2);
+});
+
+check('runner: changing screen is asked every time (no skip)', async () => {
+  const cap = sigCapture((n) => flat(10 + n * 40));
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    replan: { ok: false, error: 'x', ms: 1 },
+    answerFn: (q) => (q.target ? groundAnswer({ visible: noul(0.02), target: boxAns(0.4, 0.4, 0.6, 0.6, 0.1) }) : {}),
+  });
+  const r = await runVisionTask('click something', h.deps, h.cfg);
+  assert.equal(r.status, 'failed');
+  assert.equal(h.calls.jev, 1 + h.cfg.maxPolls);
+});
+
+check('runner: frameSkip off asks Jev on every poll', async () => {
+  const cap = sigCapture(() => flat(100));
+  const h = harness({
+    cfg: { uia: false, frameSkip: false },
+    overrides: { capture: cap.fn },
+    replan: { ok: false, error: 'x', ms: 1 },
+    answerFn: (q) => (q.target ? groundAnswer({ visible: noul(0.02), target: boxAns(0.4, 0.4, 0.6, 0.6, 0.1) }) : {}),
+  });
+  await runVisionTask('click something', h.deps, h.cfg);
+  assert.equal(h.calls.jev, 1 + h.cfg.maxPolls);
+});
+
+check('runner: unchanged verify polls of an open_app cost one Jev call, then replan', async () => {
+  const cap = sigCapture(() => flat(100));
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    plan: planResult([{ op: 'open_app', app: 'notepad', done_when: 'Notepad window is open' }, { op: 'hotkey', keys: 'ctrl+n' }]),
+    replan: { ok: false, error: 'x', ms: 1 },
+    answerFn: (q) => (q.prev_done ? { prev_done: noul(0.02) } : {}),
+  });
+  const r = await runVisionTask('open notepad and make a new file', h.deps, h.cfg);
+  assert.equal(r.status, 'failed');
+  assert.equal(h.calls.jev, 1);
+  assert.equal(h.calls.replan, 1);
+});
+
+check('runner: every step done, task_done low -> done_unconfirmed (ok), two final asks on a changing screen', async () => {
+  const cap = sigCapture((n) => flat(10 + n * 40));
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    plan: planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: '' }]),
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.2) } : {}),
+  });
+  const r = await runVisionTask('focus the address bar then wait', h.deps, h.cfg);
+  assert.equal(r.status, 'done_unconfirmed');
+  assert.equal(r.ok, true);
+  assert.equal(h.calls.jev, 2);
+});
+
+check('runner: final on an unchanged screen asks once', async () => {
+  const cap = sigCapture(() => flat(100));
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    plan: planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: '' }]),
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.2) } : {}),
+  });
+  const r = await runVisionTask('focus the address bar then wait', h.deps, h.cfg);
+  assert.equal(r.status, 'done_unconfirmed');
+  assert.equal(h.calls.jev, 1);
+});
+
+check('runner: last step unverified and done low, no replans left -> unverified', async () => {
+  const h = harness({
+    cfg: { uia: false, maxReplans: 0 },
+    plan: planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: 'address bar is focused' }]),
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.2), prev_done: noul(0.1) } : {}),
+  });
+  const r = await runVisionTask('focus the address bar then wait', h.deps, h.cfg);
+  assert.equal(r.status, 'unverified');
+});
+
+check('runner: done clearly low on a changed screen -> continue replan with screenshot, then done', async () => {
+  const seen = [];
+  let finals = 0;
+  const h = harness({
+    cfg: { uia: false },
+    plan: planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: '' }]),
+    replan: (a) => { seen.push(a); return planResult([{ op: 'hotkey', keys: 'ctrl+t', done_when: '' }], 'replan'); },
+    answerFn: (q) => { if (q.task_done) { finals++; return { task_done: noul(finals <= 2 ? 0.01 : 0.9) }; } return {}; },
+  });
+  const r = await runVisionTask('open a tab and focus the bar then wait', h.deps, h.cfg);
+  assert.equal(r.status, 'done');
+  assert.equal(h.calls.replan, 1);
+  assert.equal(seen[0].mode, 'continue');
+  assert.equal(seen[0].failed, null);
+  assert.ok(Buffer.isBuffer(seen[0].image) && seen[0].image.length > 0);
+  assert.equal(seen[0].jev.taskDone, 0.01);
+  assert.equal(h.calls.input, 2); // ctrl+l then the continued ctrl+t
+});
+
+check('runner: continue replan says complete -> done_unconfirmed; planner failure falls back to the verdict', async () => {
+  const done = harness({
+    cfg: { uia: false },
+    plan: planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: '' }]),
+    replan: { ok: true, ms: 3, plan: { steps: [], source: 'replan', complete: true } },
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.01) } : {}),
+  });
+  assert.equal((await runVisionTask('focus the address bar then wait', done.deps, done.cfg)).status, 'done_unconfirmed');
+  const soft = harness({
+    cfg: { uia: false },
+    plan: planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: '' }]),
+    replan: { ok: false, error: 'timeout', ms: 3 },
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.01) } : {}),
+  });
+  assert.equal((await runVisionTask('focus the address bar then wait', soft.deps, soft.cfg)).status, 'done_unconfirmed');
+});
+
+check('runner: continue replans share the maxReplans budget', async () => {
+  const h = harness({
+    cfg: { uia: false, maxReplans: 2 },
+    plan: planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: '' }]),
+    replan: () => planResult([{ op: 'hotkey', keys: 'ctrl+l', done_when: '' }], 'replan'),
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.01) } : {}),
+  });
+  const r = await runVisionTask('focus the address bar then wait', h.deps, h.cfg);
+  assert.equal(r.status, 'done_unconfirmed');
+  assert.equal(h.calls.replan, 2);
+});
+
+check('final question names the last step and its done_when', () => {
+  const b = buildVisionRequest({ task: 'add it to cart', step: null, verify: null, final: true, snap: null, display, cfg,
+    lastStep: { op: 'click', target: 'Add to cart button', done_when: 'cart count increases' } });
+  const q = b.questions.task_done.instructions;
+  assert.ok(q.includes('Add to cart button') && q.includes('cart count increases'));
+});
+
+check('log: a verified+grounded observation logs one line with both outcomes', async () => {
+  const lines = [];
+  const h = harness({
+    cfg: { uia: false },
+    plan: planResult([{ op: 'open_app', app: 'notepad', done_when: 'Notepad is open' }, { op: 'click', target: 'text area', done_when: '' }]),
+    overrides: { log: (l) => lines.push(l) },
+    answerFn: (q) => {
+      if (q.task_done) return { task_done: noul(0.9) };
+      if (q.target) return groundAnswer({ prev_done: noul(0.9) });
+      return {};
+    },
+  });
+  await runVisionTask('open notepad and click the text area', h.deps, h.cfg);
+  const jev = lines.filter(l => /^\[jv\] #\d+ /.test(l));
+  const nums = jev.map(l => /#(\d+)/.exec(l)[1]);
+  assert.equal(new Set(nums).size, nums.length, 'one line per Jev call');
+  assert.ok(jev.some(l => /verified\+box/.test(l)));
+});
+
+check('parseTrivialCommand: open <name> only when the app resolves; keys must be real', () => {
+  const known = (n) => ['notepad', 'vscode', 'whatsapp'].includes(n.toLowerCase());
+  assert.equal(parseTrivialCommand('open vscode project aura', { appKnown: known }), null);
+  assert.equal(parseTrivialCommand('open vscode', { appKnown: known }).steps[0].app, 'vscode');
+  assert.equal(parseTrivialCommand('open randomthing', { appKnown: known }), null);
+  assert.equal(parseTrivialCommand('open randomthing').steps[0].app, 'randomthing'); // no checker: old behaviour
+  assert.equal(parseTrivialCommand('open notepad', { appKnown: () => { throw new Error('x'); } }), null);
+  assert.equal(parseTrivialCommand('press enter key').steps[0].keys, 'enter');
+  assert.equal(parseTrivialCommand('press the big red thing'), null);
+  assert.equal(parseTrivialCommand('press f5').steps[0].keys, 'f5');
+  assert.equal(parseTrivialCommand('click the first search result link in the middle of the page now'), null);
+  assert.equal(parseTrivialCommand('click the Start button').steps[0].target, 'Start button');
+});
+
+check('runner: "open vscode project aura" goes to the planner when the app is unknown', async () => {
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { appKnown: (n) => n === 'vscode' },
+    plan: planResult([{ op: 'open_app', app: 'vscode', done_when: '' }]),
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.9) } : {}),
+  });
+  await runVisionTask('open vscode project aura', h.deps, h.cfg);
+  assert.equal(h.calls.plan, 1);
+  assert.deepEqual(h.calls.openApp, ['vscode']);
+});
+
+check('validatePlan: drag with target + from/to fractions, or two targets', () => {
+  const one = validatePlan({ steps: [{ op: 'drag', target: 'white canvas', from: [0.2, 1.4], to: [0.8, 0.5] }] });
+  assert.equal(one.ok, true);
+  assert.deepEqual(one.plan.steps[0].from, [0.2, 1]);
+  assert.deepEqual(one.plan.steps[0].to, [0.8, 0.5]);
+  const two = validatePlan({ steps: [{ op: 'drag', target_from: 'file icon', target_to: 'folder' }] });
+  assert.equal(two.ok, true);
+  assert.equal(two.plan.steps[0].target, undefined);
+  const dflt = validatePlan({ steps: [{ op: 'drag', target: 'canvas' }] });
+  assert.equal(dflt.ok, true);
+  assert.deepEqual(dflt.plan.steps[0].from, [0.25, 0.25]);
+  assert.deepEqual(dflt.plan.steps[0].to, [0.75, 0.75]);
+  for (const bad of [{ op: 'drag' }, { op: 'drag', target: 'x', from: [0.1, 0.1] }, { op: 'drag', target: 'x', from: [0.1], to: [0.2, 0.2] },
+    { op: 'drag', target_from: 'a' }, { op: 'drag', target: 'x', from: ['a', 1], to: [0, 0] }]) {
+    assert.equal(validatePlan({ steps: [bad] }).ok, false, JSON.stringify(bad));
+  }
+  assert.equal(describeStep(two.plan.steps[0]), 'drag "file icon" to "folder"');
+});
+
+check('interpret: drag over one area maps from/to inside the box (large boxes allowed)', () => {
+  const step = { op: 'drag', target: 'white canvas', from: [0.2, 0.5], to: [0.8, 0.5] };
+  const built = buildVisionRequest({ task: 't', step, verify: null, final: false, snap: null, display, cfg });
+  assert.ok(built.questions.target && !built.questions.element && built.questions.risky);
+  const r = interpretVisionAnswers({ visible: noul(0.9), blocked: noul(0.05), risky: noul(0.1), target: boxAns(0.1, 0.1, 0.9, 0.9, 0.9) }, built, display, cfg);
+  assert.equal(r.clickReason, 'drag');
+  assert.ok(Math.abs(r.click.nx - 260) < 1e-6 && Math.abs(r.click.ny - 500) < 1e-6);
+  assert.ok(Math.abs(r.click.nx2 - 740) < 1e-6 && Math.abs(r.click.ny2 - 500) < 1e-6);
+});
+
+check('interpret: drag between two boxes in ONE call', () => {
+  const step = { op: 'drag', target_from: 'file icon', target_to: 'folder' };
+  const built = buildVisionRequest({ task: 't', step, verify: null, final: false, snap: null, display, cfg });
+  assert.ok(built.questions.target && built.questions.target_to);
+  assert.equal(JSON.stringify(built.state).split(SCREEN_REF).length - 1, 1);
+  const r = interpretVisionAnswers({ visible: noul(0.9), blocked: noul(0.05), risky: noul(0.1), target: boxAns(0.1, 0.1, 0.2, 0.2, 0.9), target_to: boxAns(0.7, 0.7, 0.8, 0.8, 0.9) }, built, display, cfg);
+  assert.equal(r.clickReason, 'drag');
+  assert.ok(Math.abs(r.click.nx - 150) < 1e-6 && Math.abs(r.click.nx2 - 750) < 1e-6);
+  const bad = interpretVisionAnswers({ visible: noul(0.9), blocked: noul(0.05), risky: noul(0.1), target: boxAns(0.1, 0.1, 0.2, 0.2, 0.9), target_to: boxAns(0.7, 0.7, 0.8, 0.8, 0.05) }, built, display, cfg);
+  assert.equal(bad.click, null);
+});
+
+check('runner: drag step goes through input as one drag action with both points', async () => {
+  const plan = planResult([{ op: 'drag', target: 'white canvas', from: [0.2, 0.5], to: [0.8, 0.5], done_when: '' }]);
+  const h = harness({
+    cfg: { uia: false }, plan,
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.9) } : { visible: noul(0.9), blocked: noul(0.05), risky: noul(0.1), target: boxAns(0.1, 0.1, 0.9, 0.9, 0.9) }),
+  });
+  const r = await runVisionTask('draw a line on the canvas then stop', h.deps, h.cfg);
+  assert.equal(r.status, 'done');
+  assert.equal(h.calls.input, 1);
+  const p = h.calls.inputParams[0];
+  assert.equal(p.action, 'drag');
+  assert.ok(Math.abs(p.nx - 260) < 1e-6 && Math.abs(p.nx2 - 740) < 1e-6 && Math.abs(p.ny2 - 500) < 1e-6);
+});
+
+check('automation: drag script is mouse down, intermediate moves, mouse up', () => {
+  const Module = require('module');
+  const orig = Module._load;
+  Module._load = function (req, ...rest) { return req === 'electron' ? { Notification: class {} } : orig.call(this, req, ...rest); };
+  let auto;
+  try { auto = require(path.join(__dirname, '..', 'src', 'automation.js')); } finally { Module._load = orig; }
+  const script = auto.__dragScript(100, 200, 300, 400);
+  assert.ok(script.indexOf('::LD,') !== -1 && script.indexOf('::LU,') !== -1);
+  assert.ok(script.indexOf('::LD,') < script.indexOf('for (') && script.indexOf('for (') < script.indexOf('::LU,'));
+  assert.ok(/steps = 20/.test(script));
+});
+
+check('replanTask: sends the screenshot as inline image; continue accepts task_complete, fail does not', async () => {
+  const bodies = [];
+  const fetchFn = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => geminiBody({ steps: [], task_complete: true }) };
+  };
+  const r = await replanTask({ key: 'k', instruction: 'add all pc parts on flipkart', done: ['open flipkart.com'], failed: null,
+    screen: null, image: Buffer.from('fakejpeg'), jev: { vis: 0.02, boxConf: 0.1, taskDone: 0.01 }, mode: 'continue',
+    model: 'm', timeoutMs: 3000, hedgeMs: Infinity, maxRequests: 1, fetchFn });
+  assert.equal(r.ok, true);
+  assert.equal(r.plan.complete, true);
+  const parts = bodies[0].contents[0].parts;
+  assert.equal(parts[0].inlineData.mimeType, 'image/jpeg');
+  assert.equal(Buffer.from(parts[0].inlineData.data, 'base64').toString(), 'fakejpeg');
+  assert.ok(/task done 0\.01/.test(parts[1].text) && /direct URLs/.test(parts[1].text) && /at most 5/.test(parts[1].text));
+  const bad = await replanTask({ key: 'k', instruction: 'x', done: [], failed: { step: { op: 'click', target: 'a' }, reason: 'target_not_found' },
+    screen: null, image: null, mode: 'fail', model: 'm', timeoutMs: 600, hedgeMs: Infinity, maxRequests: 1, fetchFn });
+  assert.equal(bad.ok, false);
+  assert.ok(!bodies[1].contents[0].parts[0].inlineData);
+});
+
+
+// ── round 4: review fixes ──
+const { sameRegion } = vision;
+// A flat frame with one cell nudged by `delta` luma levels.
+const nudged = (base, col, row, delta) => { const s = flat(base); s[row * 48 + col] = base + delta; return s; };
+
+check('sameRegion: a few-level repaint at the click point is a change; far away it is not', () => {
+  const a = flat(100);
+  const atClick = nudged(100, 24, 13, 10);   // 10 levels at the screen centre
+  const farAway = nudged(100, 2, 2, 10);
+  assert.equal(sameFrame(a, atClick), true);               // tolerated by the full-frame check
+  assert.equal(sameRegion(a, atClick, 500, 500), false);   // caught around the click
+  assert.equal(sameRegion(a, farAway, 500, 500), true);
+});
+
+check('runner: toggle that repaints late is NOT treated as unchanged and is not clicked twice', async () => {
+  // frame 1 (ground) and 2 (first verify) are identical; frame 3 shows the toggle repainted by a few levels
+  const cap = sigCapture((n) => (n <= 2 ? flat(100) : nudged(100, 24, 13, 10)));
+  let prevAsked = 0;
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    plan: planResult([{ op: 'click', target: 'dark mode toggle', done_when: 'toggle is on' }, { op: 'hotkey', keys: 'ctrl+s', done_when: '' }]),
+    answerFn: (q) => {
+      if (q.task_done) return { task_done: noul(0.9) };
+      if (q.prev_done) { prevAsked++; return { prev_done: noul(prevAsked === 1 ? 0.1 : 0.9) }; }
+      return groundAnswer();
+    },
+  });
+  const r = await runVisionTask('turn on dark mode then save', h.deps, h.cfg);
+  assert.equal(r.status, 'done');
+  assert.equal(h.calls.inputParams.filter(p => p.action === 'click').length, 1, 'toggle clicked exactly once');
+  assert.ok(prevAsked >= 2, 'the repaint was seen by a real Jev call');
+  assert.ok(cap.st.n <= 5, 'the click-region check saw the repaint at once, captures ' + cap.st.n);
+});
+
+check('runner: a click is retried only after maxPolls real verify answers, even on an unchanged screen', async () => {
+  const cap = sigCapture(() => flat(100));
+  let prevAsked = 0;
+  const atClick = [];
+  const h = harness({
+    cfg: { uia: false },
+    overrides: {
+      capture: cap.fn,
+      input: async (p) => { if (p.action === 'click') atClick.push(prevAsked); return { success: true }; },
+    },
+    plan: planResult([{ op: 'click', target: 'checkbox', done_when: 'checkbox is checked' }, { op: 'hotkey', keys: 'ctrl+s', done_when: '' }]),
+    replan: { ok: false, error: 'x', ms: 1 },
+    answerFn: (q) => {
+      if (q.prev_done) prevAsked++;
+      return q.task_done ? { task_done: noul(0.9) } : (q.prev_done ? { prev_done: noul(0.1), ...groundAnswer() } : groundAnswer());
+    },
+  });
+  await runVisionTask('tick the checkbox then stop', h.deps, h.cfg);
+  assert.equal(atClick.length, 2, 'one click and one retry');
+  assert.equal(atClick[0], 0);
+  assert.ok(atClick[1] >= h.cfg.maxPolls, 'real verify answers before the retry: ' + atClick[1]);
+});
+
+check('runner: last step open_url keeps polling for the launch window before the unchanged break', async () => {
+  const cap = sigCapture(() => flat(100));
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    plan: planResult([{ op: 'open_url', url: 'https://example.com/', done_when: '' }]),
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.01) } : {}),
+  });
+  h.deps.openUrl = async () => ({ success: true });
+  const r = await runVisionTask('open example then stop', h.deps, h.cfg);
+  assert.equal(r.status, 'done_unconfirmed');
+  assert.equal(h.calls.jev, 1, 'skipped polls cost no Jev call');
+  assert.ok(cap.st.n >= Math.floor(h.cfg.appWaitMs / (h.cfg.pollIntervalMs + h.cfg.settleMs)) - 1, 'captures ' + cap.st.n);
+  assert.ok(r.ms >= h.cfg.appWaitMs, 'waited the launch window: ' + r.ms);
+});
+
+check('runner: skip compares with the frame Jev answered, so slow drift is seen', async () => {
+  // +12 levels per frame: each frame is close to the previous one but far from the first answer
+  const cap = sigCapture((n) => flat(40 + n * 12));
+  const h = harness({
+    cfg: { uia: false },
+    overrides: { capture: cap.fn },
+    plan: planResult([{ op: 'open_app', app: 'notepad', done_when: 'Notepad is open' }, { op: 'hotkey', keys: 'ctrl+n' }]),
+    replan: { ok: false, error: 'x', ms: 1 },
+    answerFn: (q) => (q.prev_done ? { prev_done: noul(0.02) } : {}),
+  });
+  await runVisionTask('open notepad and make a new file', h.deps, h.cfg);
+  assert.ok(h.calls.jev >= 3, 'jev calls ' + h.calls.jev);
+});
+
+check('drag: risky question is asked; recycle/trash/bin count as consequential', () => {
+  const one = buildVisionRequest({ task: 't', step: { op: 'drag', target: 'file list', from: [0.1, 0.1], to: [0.9, 0.9] }, verify: null, final: false, snap: null, display, cfg });
+  const two = buildVisionRequest({ task: 't', step: { op: 'drag', target_from: 'report.docx', target_to: 'Recycle Bin' }, verify: null, final: false, snap: null, display, cfg });
+  assert.ok(one.questions.risky && one.flags.riskyAsked);
+  assert.ok(two.questions.risky && two.flags.riskyAsked);
+  assert.equal(isConsequential({ op: 'drag', target_from: 'report.docx', target_to: 'Recycle Bin' }), true);
+  assert.equal(isConsequential({ op: 'click', target: 'Trash icon' }), true);
+  assert.equal(isConsequential({ op: 'click', target: 'binary options menu' }), false);
+});
+
+check('runner: risky drag asks for confirmation', async () => {
+  const h = harness({
+    cfg: { uia: false, confirm: true }, confirmResult: false,
+    plan: planResult([{ op: 'drag', target: 'file list', from: [0.1, 0.1], to: [0.9, 0.9], done_when: '' }]),
+    answerFn: () => ({ visible: noul(0.9), blocked: noul(0.05), risky: noul(0.9), target: boxAns(0.1, 0.1, 0.5, 0.5, 0.9) }),
+  });
+  const r = await runVisionTask('move the files then stop', h.deps, h.cfg);
+  assert.equal(r.status, 'refused');
+  assert.equal(h.calls.input, 0);
+});
+
+check('runner: continue replan that drops an unverified last step cannot end ok-confirmed', async () => {
+  const h = harness({
+    cfg: { uia: false },
+    plan: planResult([{ op: 'type', text: 'hello', done_when: 'hello is typed in the document' }]),
+    replan: planResult([{ op: 'hotkey', keys: 'ctrl+s', done_when: '' }], 'replan'),
+    answerFn: (q) => (q.task_done ? { task_done: noul(q.prev_done ? 0.01 : 0.2), prev_done: noul(0.1) } : {}),
+  });
+  const r = await runVisionTask('type hello in the document then save', h.deps, h.cfg);
+  assert.equal(h.calls.replan, 1);
+  assert.equal(r.status, 'unverified');
+});
+
+check('runner: continue replan "complete" with an unverified last step is unverified; null task_done counts as 0', async () => {
+  const h = harness({
+    cfg: { uia: false },
+    plan: planResult([{ op: 'type', text: 'hello', done_when: 'hello is typed' }]),
+    replan: { ok: true, ms: 3, plan: { steps: [], source: 'replan', complete: true } },
+    answerFn: (q) => (q.task_done ? { task_done: noul(0.01), prev_done: noul(0.1) } : {}),
+  });
+  assert.equal((await runVisionTask('type hello then stop', h.deps, h.cfg)).status, 'unverified');
 });
 
 check('sanitizeText: removes backticks and SCREEN_REF, collapses, caps', () => {
