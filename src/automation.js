@@ -194,7 +194,9 @@ function runPersistent(script, timeoutMs = 8000) {
     }, timeoutMs);
     psPending = { resolve, timer };
     try {
-      proc.stdin.write(`${script}\nWrite-Output "${PS_SENTINEL}"\n`);
+      // The blank line ends a multi-line block (try/catch, for): `-Command -`
+      // keeps collecting a block until it sees one, which stalled the marker.
+      proc.stdin.write(`${script}\n\nWrite-Output "${PS_SENTINEL}"\n`);
     } catch {
       clearTimeout(timer); psPending = null; killPS(); resolve(null);
     }
@@ -315,15 +317,19 @@ Start-Sleep -Milliseconds 40
 Write-Output "scrolled ${direction} ${clicks} notches at ${x},${y}"`;
 }
 
+const TYPE_ERROR_MARK = 'AURA_TYPE_ERROR:';
+
 function buildTypeScript(text) {
-  // Escape for PowerShell SendKeys
-  const escaped = text
-    .replace(/\+/g, '{+}').replace(/\^/g, '{^}').replace(/%/g, '{%}')
-    .replace(/~/g, '{~}').replace(/\(/g, '{(}').replace(/\)/g, '{)}')
-    .replace(/\[/g, '{[}').replace(/\]/g, '{]}').replace(/\{/g, '{{').replace(/\}/g, '}}');
-  return `$wsh = New-Object -ComObject WScript.Shell
+  // Escape for SendKeys in ONE pass: chained replaces re-escape the braces they
+  // just added ("+" became "{{+}}"). Each special char becomes "{c}".
+  const escaped = text.replace(/[+^%~()[\]{}]/g, c => `{${c}}`);
+  // A PowerShell error must not look like success: report it with a marker that
+  // computerAction turns into success:false.
+  return `try {
+$wsh = New-Object -ComObject WScript.Shell
 $wsh.SendKeys('${escaped.replace(/'/g, "''")}')
-Write-Output "typed text"`;
+Write-Output "typed text"
+} catch { Write-Output "${TYPE_ERROR_MARK} $($_.Exception.Message)" }`;
 }
 
 // SendKeys tokens for non-printable keys.
@@ -495,6 +501,9 @@ async function computerAction(params) {
   const SETTLE = { type: 260, key: 220, drag: 220 };
   await new Promise(r => setTimeout(r, SETTLE[action] ?? 130));
 
+  if (action === 'type' && output && output.includes(TYPE_ERROR_MARK)) {
+    return { success: false, output };
+  }
   return { success: true, output: output || 'Done' };
 }
 
@@ -575,4 +584,5 @@ module.exports = {
   focusWindow, minimizeAll, closeApp,
   lockScreen, sleepPc,
   shutdownAutomation,
+  buildTypeScript, // exported for scripts/jev-vision-selftest.js
 };

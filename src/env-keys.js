@@ -92,4 +92,35 @@ function resolveJevKey({ settingsKey, searchDirs }) {
   return { key: null, source: null };
 }
 
-module.exports = { parseDotEnv, resolveJevKey };
+/**
+ * Precedence: settingsKey (non-empty) > process.env.GEMINI_API_KEY > .env
+ * GEMINI_API_KEY. First existing .env in searchDirs wins. Used by the vision
+ * planner (contract section 3.3).
+ * @param {{ settingsKey?: string, searchDirs: string[] }} opts
+ * @returns {{ key: string|null, source: 'settings'|'process.env'|'.env'|null }}
+ */
+function resolveGeminiKey({ settingsKey, searchDirs }) {
+  if (settingsKey && settingsKey.trim()) {
+    return { key: settingsKey.trim(), source: 'settings' };
+  }
+
+  const procKey = process.env.GEMINI_API_KEY;
+  if (procKey && procKey.trim()) {
+    return { key: procKey.trim(), source: 'process.env' };
+  }
+
+  let parsed = null;
+  for (const dir of searchDirs || []) {
+    if (!dir) continue;
+    const candidate = loadDotEnvCached(path.join(dir, '.env'));
+    if (candidate) { parsed = candidate; break; }
+  }
+  if (!parsed) return { key: null, source: null };
+
+  const geminiKey = parsed.GEMINI_API_KEY;
+  if (geminiKey && geminiKey.trim()) return { key: geminiKey.trim(), source: '.env' };
+
+  return { key: null, source: null };
+}
+
+module.exports = { parseDotEnv, resolveJevKey, resolveGeminiKey };

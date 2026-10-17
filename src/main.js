@@ -1,13 +1,17 @@
-const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer, clipboard, shell } = require('electron');
+const { app, BrowserWindow, globalShortcut, Tray, Menu, ipcMain, screen, nativeImage, desktopCapturer, clipboard, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const automation = require('./automation');
 const store = require('./store');
 const visionMemory = require('./vision-memory');
 const uia = require('./uia');
-const { jevCall } = require('./jev');
+const { jevCall, jevCallImages } = require('./jev');
 const { buildJevRequest, interpretJevAnswers, snapshotSignature } = require('./jev-step');
-const { resolveJevKey } = require('./env-keys');
+const { resolveJevKey, resolveGeminiKey } = require('./env-keys');
+const { runVisionTask } = require('./jev-vision-runner');
+const { planTask, replanTask } = require('./jev-planner');
+const { primaryDisplayInfo, capturePrimaryJpeg } = require('./screen-capture');
+const { readVisionConfig } = require('./jev-vision');
 
 let mainWindow = null;
 let dashboardWindow = null;
@@ -19,6 +23,7 @@ let tray = null;
 let isVisible = false;
 let actionModeHidden = [];  // windows we hid during action mode
 let lastSnapshot = null;    // full UiaSnapshot (with elements) from the most recent uia-snapshot call
+let visionRun = null;       // { ctl, controller } of the active Jev Vision run, else null
 
 const COLLAPSED_W  = 96;  // initial guess only — renderer reports its real size once painted
 const COLLAPSED_H  = 56;
@@ -334,6 +339,13 @@ function createTray(shortcutLabel) {
 }
 
 function toggleAssistant() {
+  // While a vision run is active the pill is hidden: the hotkey becomes the
+  // user's stop button (contract 3.7).
+  if (visionRun) {
+    visionRun.ctl.aborted = true;
+    try { visionRun.controller.abort(); } catch {}
+    return;
+  }
   if (!mainWindow) return;
   if (isVisible) {
     mainWindow.webContents.send('deactivate');
@@ -513,6 +525,8 @@ app.whenReady().then(() => {
   const cfg = jevConfig();
   if (cfg.enabled) uia.uiaWarm();
   debugLog(`jev key source=${cfg.source || 'none'} enabled=${cfg.enabled} jevOnly=${cfg.jevOnly}`);
+  const vcfg = jevVisionConfig();
+  debugLog(`[jv] mode enabled=${vcfg.enabled} jevKey=${cfg.source || 'none'} planner=${!!vcfg.plannerKey} model=${vcfg.cfg.model}`);
 });
 
 app.on('will-quit', () => {
@@ -617,6 +631,26 @@ function jevConfig() {
   return { enabled, key, source, jevOnly };
 }
 const JEV_ONLY_DEFAULT = true;
+
+// Jev Vision mode (text command -> Gemini text plan -> Jev screenshot+Box
+// execution). Contract: docs/jev-vision/CONTRACT.md. No store setting (V8): the
+// flag is env-only so the dashboard "save" merge cannot clobber it. Resolved
+// lazily per status/run call so a settings edit takes effect without a restart.
+const JEV_VISION_DEFAULT = true;
+
+function jevVisionConfig() {
+  const jev = jevConfig();
+  const searchDirs = [...new Set([app.getAppPath(), process.cwd()])];
+  const { key: plannerKey } = resolveGeminiKey({
+    settingsKey: store.get('settings', 'apiKey'),
+    searchDirs,
+  });
+  const cfg = readVisionConfig(process.env);
+  const enabled = (process.env.AURA_JEV_VISION !== undefined
+    ? process.env.AURA_JEV_VISION !== '0'
+    : JEV_VISION_DEFAULT) && jev.enabled && !!jev.key && process.platform === 'win32';
+  return { enabled, jevKey: jev.key, plannerKey, cfg };
+}
 
 // Physical-pixel rects of every visible, non-minimized Aura window, so the
 // UIA host can exclude our own pill/dashboard/agent windows from clicks.
@@ -871,4 +905,133 @@ ipcMain.handle('jev-decide', async (_e, params) => {
     `top2=${top2Str} ${r.ms}ms -> ${decision.kind}${decision.op ? '/' + decision.op : ''}${decision.reason ? '/' + decision.reason : ''} ${decision.target || ''}`);
 
   return { ...decision, ms: r.ms, usage: r.usage };
+});
+
+// ── Jev Vision mode (text command) ───────────────────────────────────────────
+// The whole run loop executes in main (V1): the renderer sends one
+// 'jev-vision-run' and receives 'jev-vision-progress' events. Contract 2.10/3.7.
+function visionSendProgress(evt) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('jev-vision-progress', evt);
+}
+
+// Give focus back to the window the run was working in (hwnd comes from the
+// UIA snapshot, e.g. "0x1A2B3C") after a native dialog stole it.
+function refocusHwnd(hwnd) {
+  if (typeof hwnd !== 'string' || !/^0x[0-9a-f]+$/i.test(hwnd)) return Promise.resolve();
+  const n = Number(hwnd);
+  return automation.runPowerShell(
+    `Add-Type -Namespace AuraFg -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);'\n` +
+    `[AuraFg.W]::SetForegroundWindow([IntPtr]${n}) | Out-Null`
+  ).catch(() => {});
+}
+
+function visionDeps(bundle, ctl, controller) {
+  const { jevKey, plannerKey, cfg } = bundle;
+  let targetHwnd = null; // window of the most recent UIA snapshot
+  return {
+    capture: () => capturePrimaryJpeg({ maxSide: cfg.imgMaxSide, quality: cfg.jpegQuality }),
+    uiaSnapshot: async () => {
+      const snap = await uia.uiaSnapshot({
+        excludePid: process.pid,
+        auraRects: auraPhysicalRects(),
+        maxElements: cfg.uiaMaxElements,
+        timeoutMs: cfg.uiaTimeoutMs,
+      });
+      if (snap && snap.ok && snap.hwnd) targetHwnd = snap.hwnd;
+      return snap;
+    },
+    uiaClick: ({ snapshotId, index }) => uia.uiaAct({ snapshotId, index, op: 'click' }),
+    // Same logical ctx the 'computer-action' handler builds: bounds are DIP
+    // despite the physW/physH names (T1, J4).
+    input: (params) => {
+      const display = screen.getPrimaryDisplay();
+      const physW = display.bounds.width;
+      const physH = display.bounds.height;
+      const scaleX = physW / 1280;
+      const scaleY = physH / 720;
+      return automation.computerAction({ ...params, physW, physH, scaleX, scaleY });
+    },
+    openApp: (name) => automation.openApp(name),
+    jev: ({ state, questions, image }) => jevCallImages({
+      key: jevKey, model: cfg.model, state, questions, images: [image],
+      transport: cfg.transport, timeoutMs: cfg.jevTimeoutMs, signal: controller.signal,
+    }),
+    plan: plannerKey ? (instruction) => planTask({
+      key: plannerKey, instruction, model: cfg.plannerModel,
+      timeoutMs: cfg.plannerTimeoutMs, signal: controller.signal,
+    }) : null,
+    replan: plannerKey ? (args) => replanTask({
+      key: plannerKey, instruction: args.instruction, done: args.done,
+      failed: args.failed, screen: args.screen, model: cfg.plannerModel,
+      timeoutMs: cfg.plannerTimeoutMs, signal: controller.signal,
+    }) : null,
+    confirm: async (text) => {
+      const opts = { type: 'warning', buttons: ['Do it', 'Cancel'], defaultId: 1, cancelId: 1, message: text };
+      // No parent: the pill window is hidden during a run, and a dialog parented
+      // to a hidden window may never show. The 30 s timeout declines (V9) and
+      // closes the dialog through its AbortSignal so it does not linger.
+      const dlgCtl = new AbortController();
+      const timer = setTimeout(() => dlgCtl.abort(), 30000);
+      let res;
+      try {
+        res = await dialog.showMessageBox({ ...opts, signal: dlgCtl.signal });
+      } catch {
+        res = { response: 1 };
+      } finally {
+        clearTimeout(timer);
+      }
+      // The dialog took focus; hand it back before the next action.
+      await refocusHwnd(targetHwnd);
+      return !!res && res.response === 0 && !dlgCtl.signal.aborted;
+    },
+    display: () => primaryDisplayInfo(),
+    log: (line) => debugLog(line),
+    progress: (evt) => visionSendProgress(evt),
+    now: () => Date.now(),
+    sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+    signal: ctl,
+  };
+}
+
+ipcMain.handle('jev-vision-status', () => {
+  const c = jevVisionConfig();
+  return { enabled: c.enabled, hasJevKey: !!c.jevKey, hasPlannerKey: !!c.plannerKey, model: c.cfg.model };
+});
+
+ipcMain.handle('jev-vision-run', async (_e, instruction) => {
+  const blank = { ok: false, status: 'error', actions: 0, jevCalls: 0, replans: 0, plannerMs: 0, ms: 0 };
+  if (typeof instruction !== 'string' || !instruction.trim()) {
+    return { ...blank, summary: 'empty instruction' };
+  }
+  if (visionRun) return { ...blank, summary: 'busy' };
+  const bundle = jevVisionConfig();
+  if (!bundle.enabled) return { ...blank, summary: 'vision mode disabled' };
+
+  const ctl = { aborted: false };
+  const controller = new AbortController();
+  const run = { ctl, controller };
+  visionRun = run;
+  enterActionMode();
+  try {
+    // The previously focused app regains focus asynchronously after action
+    // mode (T13); let it settle before the first capture/UIA snapshot.
+    await new Promise(r => setTimeout(r, 150));
+    try { fetch('https://api.typesafe.ai/', { method: 'HEAD' }).catch(() => {}); } catch {}
+    uia.uiaWarm();
+    const deps = visionDeps(bundle, ctl, controller);
+    return await runVisionTask(instruction, deps, bundle.cfg);
+  } catch (e) {
+    return { ...blank, summary: String((e && e.message) || e) };
+  } finally {
+    if (visionRun === run) visionRun = null;
+    exitActionMode();
+  }
+});
+
+ipcMain.handle('jev-vision-abort', () => {
+  if (visionRun) {
+    visionRun.ctl.aborted = true;
+    try { visionRun.controller.abort(); } catch {}
+  }
+  return true;
 });

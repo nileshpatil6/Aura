@@ -67,6 +67,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   uiaAct:      (p)   => ipcRenderer.invoke('uia-act', p),
   jevDecide:   (p)   => ipcRenderer.invoke('jev-decide', p),
 
+  // Jev Vision mode (text command)
+  jevVisionStatus:     ()     => ipcRenderer.invoke('jev-vision-status'),
+  jevVisionRun:        (text) => ipcRenderer.invoke('jev-vision-run', text),
+  jevVisionAbort:      ()     => ipcRenderer.invoke('jev-vision-abort'),
+  onJevVisionProgress: (cb)   => ipcRenderer.on('jev-vision-progress', (_e, evt) => cb(evt)),
+
   // Extended automation
   readClipboard:  ()      => ipcRenderer.invoke('read-clipboard'),
   writeClipboard: (t)     => ipcRenderer.invoke('write-clipboard', t),

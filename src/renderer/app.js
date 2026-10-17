@@ -67,6 +67,8 @@ let showingInput   = false;
 let transcriptText = '';
 let autoHideTimer  = null;
 let isEdgeHidden   = false;
+let visionMode     = false;  // set at boot from jev-vision-status; when true there is no voice
+let visionRunning  = false;  // a jev-vision-run is in flight
 
 // ──── Icon paths per state ─────────────────────────────────────────────────────
 const MIC_PATH = 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V22H8v2h8v-2h-3v-1.06A9 9 0 0 0 21 12v-2h-2z';
@@ -124,6 +126,7 @@ function armStuckWatchdog(state) {
   stuckTimer = setInterval(() => {
     if (currentState !== state) { clearInterval(stuckTimer); stuckTimer = null; return; }
     const heldMs = Date.now() - stateEnteredAt;
+    if (visionRunning) return; // the main-side run enforces its own time limit
     const busy = toolIsRunning();
     const deadline = busy ? TOOL_BUSY_LIMIT : limit;
     if (heldMs < deadline) return;
@@ -296,7 +299,17 @@ function closePanel() {
 }
 
 // ──── Voice activate ──────────────────────────────────────────────────────────
+// Vision mode replaces voice: the orb/hotkey opens the text command box (V10).
+function openVisionInput() {
+  if (!isPanelOpen) openPanel();
+  showingInput = true;
+  textInputRow.classList.remove('hidden');
+  textInput.placeholder = 'Tell Aura what to do...';
+  setTimeout(() => textInput.focus(), 40);
+}
+
 async function activateVoice() {
+  if (visionMode) { openVisionInput(); return; }
   cancelAutoHide();
   voiceActive = true;
   isMuted     = false;
@@ -310,6 +323,7 @@ async function activateVoice() {
 }
 
 async function ensureConnected() {
+  if (visionMode) return false; // no Gemini Live in vision mode (J10)
   if (gemini && gemini.connected) return true;
 
   if (!(await hasApiKey())) {
@@ -407,6 +421,7 @@ textInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitText
 async function submitText() {
   const txt = textInput.value.trim();
   if (!txt) return;
+  if (visionMode) { await submitVisionText(txt); return; }
   if (!gemini || !gemini.connected) {
     const ok = await ensureConnected();
     if (!ok) return;
@@ -422,11 +437,45 @@ async function submitText() {
   textInputRow.classList.add('hidden');
 }
 
+// Vision mode: one text command, one main-side run. No audio APIs are touched.
+async function submitVisionText(txt) {
+  if (visionRunning) { dlog('vision run ignored - already running'); return; }
+  visionRunning = true;
+  textInput.value = '';
+  textInputRow.classList.add('hidden');
+  showingInput = false;
+  transcriptText = '';
+  transcriptEl.textContent = '';
+  transcriptEl.classList.add('hidden');
+  userTextEl.classList.add('hidden');
+  errorBox.classList.add('hidden');
+  closeBtn.classList.remove('hidden');
+  setUserText(txt);
+  setState('thinking');
+  try {
+    const result = await window.electronAPI.jevVisionRun(txt);
+    if (result && result.ok) appendTranscript(result.summary || 'Done.');
+    else showError((result && result.summary) || 'Vision run failed.');
+  } catch (e) {
+    showError((e && e.message) || 'Vision run failed.');
+  } finally {
+    visionRunning = false;
+    setState('idle');
+  }
+}
+
 // ──── Electron IPC ────────────────────────────────────────────────────────────
 if (window.electronAPI) {
   window.electronAPI.onActivate(() => { if (!voiceActive) activateVoice(); });
-  window.electronAPI.onDeactivate(() => { if (voiceActive) closeAll(); });
+  window.electronAPI.onDeactivate(() => { if (voiceActive || visionMode) closeAll(); });
   window.electronAPI.onPillPeeking?.(() => {});
+  window.electronAPI.onJevVisionProgress?.((evt) => {
+    if (!visionMode || !evt) return;
+    if (evt.phase === 'planning') appendTranscript('Planning...\n');
+    else if (evt.phase === 'step' && evt.desc) appendTranscript(`Step ${evt.index}/${evt.total}: ${evt.desc}\n`);
+    else if (evt.phase === 'replan') appendTranscript('Replanning...\n');
+    else if (evt.phase === 'confirm') appendTranscript('Waiting for confirmation...\n');
+  });
 }
 
 // ──── Click-through: ignore mouse on transparent areas ────────────────────────
@@ -440,6 +489,20 @@ document.addEventListener('mousemove', (e) => {
 dlog('renderer boot — logging active');
 syncPillSize(); // setState('idle') is a no-op (already the initial state) so size it directly
 scheduleAutoHide();
+
+// Vision mode is decided in main (key + platform + flag). Any failure -> voice
+// mode, so a broken status call can never brick the pill (contract 3.9).
+(async () => {
+  try {
+    const st = await window.electronAPI?.jevVisionStatus?.();
+    visionMode = st?.enabled === true;
+    if (visionMode && textInput) textInput.placeholder = 'Tell Aura what to do...';
+    dlog(`vision mode ${visionMode ? 'enabled' : 'disabled'}`);
+  } catch (e) {
+    visionMode = false;
+    dlog('vision status check failed', (e && e.message) || String(e));
+  }
+})();
 
 // Surface unexpected failures in the log rather than letting them vanish into a
 // closed DevTools console — a silent throw mid-turn is exactly how the UI ends
