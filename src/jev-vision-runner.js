@@ -6,15 +6,15 @@
 const {
   parseTrivialCommand, buildVisionRequest, interpretVisionAnswers, describeStep,
   actionSignature, isConsequential, sanitizeText, SCREEN_REF, describeElement,
-  stepNeedsGround, isClickOp, boxCenterToNormalized, isRiskyHotkey, sameFrame, sameRegion,
+  stepNeedsGround, isClickOp, boxCenterToNormalized, isHardRiskyHotkey, needsRiskCheck,
+  buildRiskCheckRequest, zoomRectFor, buildZoomRequest, mapZoomBox, parseBoxAnswer, sameFrame, sameRegion,
 } = require('./jev-vision');
 
 const TIMEOUT_MARK = Symbol('uia-grace-timeout');
 
-// Final verdict thresholds that are not part of the Jev threshold table:
-// below SURE_NOT_DONE the screen clearly does not show the result; below
-// LIKELY_NOT_DONE an unverified last step is not trusted either.
-const SURE_NOT_DONE = 0.05;
+// Below this final task_done the run asks the planner (with the screenshot) to
+// continue or declare the task complete; Jev alone often cannot judge an
+// open-ended task ("add party items to the cart") from one frame.
 const LIKELY_NOT_DONE = 0.3;
 
 function graceRace(promise, ms) {
@@ -65,6 +65,9 @@ async function runVisionTask(instruction, deps, cfg) {
     verifyReal: 0,           // real (non-skipped) Jev answers for the pending verify
     forceReal: false,        // next observation must call Jev even on an unchanged frame
     droppedUnverified: false, // a continue replan replaced a last step whose check never passed
+    changedSinceAction: false, // a frame differed from the one before the newest action
+    firstSigAfter: null,     // first frame after an action that had no "before" frame
+    unchangedSince: 0,       // when the current run of unchanged frames started
   };
   let prefetched = null;
   let pollCount = 0;
@@ -102,6 +105,8 @@ async function runVisionTask(instruction, deps, cfg) {
   function fmtNum(v) { return v === null || v === undefined ? '-' : Number(v).toFixed(2); }
 
   function logJev(obs, outcome) {
+    // A wait on a static screen logs its first same-frame poll only.
+    if (obs.unchanged && state.unchangedRun > 1 && (outcome === 'poll' || outcome === 'same-frame')) return;
     const { read, step, final, cap, snap, uiaStatus, jevMs } = obs;
     const op = step ? step.op : (final ? 'final' : 'verify');
     const target = step && (step.target || step.target_from) ? sanitizeText(step.target || step.target_from, 40) : '';
@@ -145,6 +150,12 @@ async function runVisionTask(instruction, deps, cfg) {
     // not call Jev (or UIA) again. It counts as a repeated answer.
     const sig = cfg.frameSkip && cap.sig ? cap.sig : null;
     if (sig) state.lastSeenSig = sig;
+    if (sig) {
+      // Baseline: the frame before the action, else the first one seen after it.
+      const base = state.sigBeforeAction || state.firstSigAfter;
+      if (!base) state.firstSigAfter = sig;
+      else if (!sameFrame(base, sig)) state.changedSinceAction = true;
+    }
     const key = askKey({ step, ground, final });
     // Always compared with the frame Jev actually answered, never with the previous
     // poll, so a slow change cannot hide. After a click the area around the click is
@@ -153,6 +164,7 @@ async function runVisionTask(instruction, deps, cfg) {
     state.forceReal = false;
     if (!forced && sig && state.lastAsk && state.lastAsk.key === key && sameFrame(state.lastAsk.sig, sig) &&
         (!clickAt || sameRegion(state.lastAsk.sig, sig, clickAt.nx, clickAt.ny))) {
+      if (state.unchangedRun === 0) state.unchangedSince = deps.now();
       state.unchangedRun++;
       return { ...state.lastAsk.obs, cap, unchanged: true };
     }
@@ -246,6 +258,8 @@ async function runVisionTask(instruction, deps, cfg) {
     let outcome = 'ok';
     state.lastAsk = null;                      // the screen is about to change
     state.sigBeforeAction = state.lastSeenSig;
+    state.firstSigAfter = null;
+    state.changedSinceAction = false;
 
     if (isClickOp(step.op)) {
       const res = await actClick(step, click, built, read);
@@ -369,10 +383,107 @@ async function runVisionTask(instruction, deps, cfg) {
     return { ok: true };
   }
 
+  // Enter-like keys and type+submit are judged on the screen by Jev (riskCheck)
+  // rather than always confirmed; shift+delete always is.
   function consequential(step, read) {
     return step.risky === true || isConsequential(step) ||
-      (step.op === 'hotkey' && isRiskyHotkey(step.keys)) ||
-      (read && read.risky !== null && read.risky >= cfg.thresholds.risky);
+      (step.op === 'hotkey' && isHardRiskyHotkey(step.keys)) ||
+      (needsRiskCheck(step) && !cfg.riskCheck) ||
+      (!!read && read.risky !== null && read.risky !== undefined && read.risky >= cfg.thresholds.risky);
+  }
+
+  // Asks Jev whether an enter-like key / submit on the CURRENT screen would send,
+  // buy, post or delete. Any failure answers risky, so the user is asked instead.
+  async function riskCheck(step) {
+    if (state.jevCalls >= cfg.maxJevCalls) return { read: { risky: 1 } }; // no budget left: ask the user
+    const capAt = deps.now();
+    let raw = null;
+    let jr = null;
+    try {
+      raw = await deps.capture();
+      if (deps.signal.aborted) return { aborted: true };
+      if (!raw || !raw.ok) return { read: { risky: 1 } };
+      if (cfg.frameSkip && raw.sig) state.lastSeenSig = raw.sig;
+      const built = buildRiskCheckRequest(task, step);
+      const image = { ref: SCREEN_REF, part: 'image', buffer: raw.jpeg, format: 'jpeg' };
+      jr = await deps.jev({ state: built.state, questions: built.questions, image });
+      state.jevCalls++;
+    } catch {
+      jr = null;
+    }
+    if (deps.signal.aborted) return { aborted: true };
+    if (!raw || !raw.ok) return { read: { risky: 1 } };
+    const a = jr && jr.ok && jr.answers ? jr.answers.risky : null;
+    const risky = a && a.type === 'noul' && Number.isFinite(a.noul) ? a.noul : 1;
+    const verdict = risky >= cfg.thresholds.risky ? 'confirm' : 'ok';
+    log(`[jv] #${state.jevCalls} s${state.i + 1}/${state.plan.steps.length} risk "${sanitizeText(describeStep(step), 40)}" ` +
+      `cap=${raw.ms != null ? raw.ms : deps.now() - capAt} jev=${jr && jr.ms != null ? jr.ms : '-'} | risky=${fmtNum(risky)} -> ${verdict}`);
+    return { read: { risky } };
+  }
+
+  // Small targets (toolbar icons) are imprecise on a 1280px frame: re-ask Jev on a
+  // full-resolution crop around the first box and click the refined center. Any
+  // failure keeps the first box. Mutates read.click / read.box on success.
+  async function zoomRefine(step, read) {
+    if (!cfg.zoom || !deps.captureCrop || !read.click || read.click.source !== 'box' || !isClickOp(step.op)) return {};
+    if (state.jevCalls >= cfg.maxJevCalls) return {};
+    const display = deps.display();
+    const rect = zoomRectFor(read.box, display, cfg);
+    if (!rect) return {};
+    const start = deps.now();
+    let crop = null;
+    let jr = null;
+    try {
+      crop = await deps.captureCrop(rect);
+      if (deps.signal.aborted) return { aborted: true };
+      if (!crop || !crop.ok) return {};
+      const built = buildZoomRequest(step);
+      const image = { ref: SCREEN_REF, part: 'image', buffer: crop.jpeg, format: 'jpeg' };
+      jr = await deps.jev({ state: built.state, questions: built.questions, image });
+      state.jevCalls++;
+    } catch {
+      return {};
+    }
+    if (deps.signal.aborted) return { aborted: true };
+    const tag = `[jv] #${state.jevCalls} s${state.i + 1}/${state.plan.steps.length} zoom "${sanitizeText(step.target, 40)}" crop=${crop.width}x${crop.height}`;
+    if (!jr || !jr.ok) { log(`${tag} jev=failed -> keep`); return {}; }
+    const v = jr.answers && jr.answers.visible;
+    const vis = v && v.type === 'noul' && Number.isFinite(v.noul) ? v.noul : null;
+    // The target fills far more of a crop than of the screen; only reject a box that is most of it.
+    const pb = parseBoxAnswer(jr.answers, true, cfg, 'target', 0.6);
+    if (vis === null || vis < cfg.thresholds.visible || !pb.box || pb.boxReject) {
+      log(`${tag} jev=${jr.ms} vis=${fmtNum(vis)} box=${pb.boxReject || '-'} -> keep`);
+      return {};
+    }
+    const g = mapZoomBox(crop.rect || rect, pb.box);
+    const c = boxCenterToNormalized(g);
+    const dx = Math.round(((c.nx - read.click.nx) / 1000) * display.physW);
+    const dy = Math.round(((c.ny - read.click.ny) / 1000) * display.physH);
+    // A refinement corrects a near miss; a center that left the first box grown by
+    // its own size on every side is a different control, so the first box stands.
+    const b = read.box;
+    const ew = Math.max(b.right - b.left, 0.01);
+    const eh = Math.max(b.bottom - b.top, 0.01);
+    const cx = c.nx / 1000;
+    const cy = c.ny / 1000;
+    if (cx < b.left - ew || cx > b.right + ew || cy < b.top - eh || cy > b.bottom + eh) {
+      log(`${tag} jev=${jr.ms} vis=${fmtNum(vis)} moved=${dx},${dy}px too far -> keep`);
+      return {};
+    }
+    log(`${tag} jev=${jr.ms} vis=${fmtNum(vis)} box=@${pb.box.confidence.toFixed(2)} moved=${dx},${dy}px total=${deps.now() - start}`);
+    read.box = g;
+    read.click = { source: 'box', nx: c.nx, ny: c.ny };
+    read.clickReason = 'box_zoom';
+    return {};
+  }
+
+  // Launches are given the full appWaitMs, except that a page which changed after
+  // the action and then held still for stableMs has finished loading. An app may
+  // sit on a still splash screen, so open_app also needs half the window first.
+  function loadedAndStable(pending) {
+    if (!pending || !state.changedSinceAction || state.unchangedRun === 0) return false;
+    if (deps.now() - state.unchangedSince < cfg.stableMs) return false;
+    return pending.step.op === 'open_url' || deps.now() - pending.actedAt >= cfg.appWaitMs / 2;
   }
 
   async function gate(step, read) {
@@ -386,7 +497,13 @@ async function runVisionTask(instruction, deps, cfg) {
   // Steps that need no observation still pass the safety gate; gate() lets
   // everything through that consequential(step, null) says is harmless.
   async function executeDirect(step) {
-    const g = await gate(step, null);
+    let read = null;
+    if (needsRiskCheck(step) && cfg.riskCheck && !consequential(step, null)) {
+      const rc = await riskCheck(step);
+      if (rc.aborted) return { aborted: true };
+      read = rc.read;
+    }
+    const g = await gate(step, read);
     if (g.aborted) return { aborted: true };
     if (g.refused) return { refused: true };
     return executeStep(step, null, null, null);
@@ -412,6 +529,8 @@ async function runVisionTask(instruction, deps, cfg) {
       return finish('error', (pr && pr.error) || 'planning failed');
     }
     plan = pr.plan;
+    // The planning screenshot is the "before" frame for a first step that needs no observation.
+    if (capRes && capRes.ok && capRes.sig && cfg.frameSkip) state.lastSeenSig = capRes.sig;
     log(`[jv] run "${sanitizeText(instruction, 80)}" plan=gemini ${Math.round(state.plannerMs)}ms req=${pr.requests || 1} steps=${plan.steps.length}`);
     if (plan.steps[0] && stepNeedsGround(plan.steps[0]) && capRes && capRes.ok &&
         deps.now() - capRes.at <= cfg.settleMs * 4) {
@@ -473,7 +592,7 @@ async function runVisionTask(instruction, deps, cfg) {
           // after maxPolls real Jev answers (a skipped poll is forced real if needed).
           const clickVerify = isClickOp(pending.step.op);
           let exhausted = launching
-            ? deps.now() - pending.actedAt >= cfg.appWaitMs
+            ? deps.now() - pending.actedAt >= cfg.appWaitMs || loadedAndStable(pending)
             : clickVerify
               ? pollCount >= cfg.maxPolls
               : pollCount >= cfg.maxPolls || state.unchangedRun >= 2;
@@ -505,6 +624,8 @@ async function runVisionTask(instruction, deps, cfg) {
 
       if (ground) {
         if (read.click) {
+          const z = await zoomRefine(step, read);
+          if (z.aborted) return finish('cancelled', 'Cancelled');
           const sig = actionSignature(step, read.click);
           const n = (state.sigCounts.get(sig) || 0) + 1;
           state.sigCounts.set(sig, n);
@@ -617,7 +738,7 @@ async function runVisionTask(instruction, deps, cfg) {
         return finish('done', doneSummary());
       }
       logJev(obs, obs.unchanged ? 'same-frame' : 'poll');
-      const waiting = launching && deps.now() - pending.actedAt < cfg.appWaitMs;
+      const waiting = launching && deps.now() - pending.actedAt < cfg.appWaitMs && !loadedAndStable(pending);
       if (obs.unchanged) { if (!waiting) break; }
       else {
         calls++;
@@ -631,12 +752,10 @@ async function runVisionTask(instruction, deps, cfg) {
     // (earlier steps gate on theirs before the next one may run).
     const allVerified = !verifyStep && !state.droppedUnverified;
     const td = read && read.taskDone !== null ? read.taskDone : 0;
-    const screenChanged = !(state.sigBeforeAction && state.lastSeenSig && sameFrame(state.sigBeforeAction, state.lastSeenSig));
     const canContinue = !!deps.replan && state.replans < cfg.maxReplans;
-    // Only the CURRENT last step's failed check argues for continuing; a dropped one is just remembered for the verdict.
-    const clearlyNotDone = (td < SURE_NOT_DONE && screenChanged) || (!!verifyStep && td < LIKELY_NOT_DONE);
-
-    if (clearlyNotDone && canContinue) {
+    // Jev is unsure the task is done: the planner looks at the screenshot and
+    // either plans the next steps or answers task_complete. Bounded by maxReplans.
+    if (td < LIKELY_NOT_DONE && canContinue) {
       const rp = await doReplan('not_complete', null, 'continue');
       if (rp.done) return rp.done;
       if (rp.ok) return null;

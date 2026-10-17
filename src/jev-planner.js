@@ -356,6 +356,8 @@ async function replanTask({ key, instruction, done, failed, screen, image, jev, 
   }
   lines.push('Prefer direct URLs (for example https://www.flipkart.com/search?q=<query>, https://www.amazon.in/s?k=<query>) over clicking search results or menus.');
   lines.push('Return ONLY the next steps needed to finish TASK, at most 5. Do not repeat completed steps. You will be asked again after these run.');
+  lines.push('Continue from the screen exactly as it is now: never reopen an app or page that is already open, never retype text that was already typed, ' +
+    'and if a dialog is open (Save as, Open, a popup, a confirmation) work inside that dialog first.');
   if (mode === 'continue') {
     lines.push('First check the screenshot: if TASK is already visibly complete, return exactly {"steps":[],"task_complete":true}.');
   }

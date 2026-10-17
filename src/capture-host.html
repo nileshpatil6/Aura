@@ -13,6 +13,7 @@ let stream = null;
 let reader = null;
 let running = false;
 let latest = null;      // newest VideoFrame
+let grabbed = null;     // clone of the frame the last grab() encoded, so crop() zooms into the same pixels
 let frameAt = 0;        // performance.now() when `latest` arrived
 let waiters = [];       // resolvers woken by every new frame
 
@@ -59,7 +60,8 @@ async function stop() {
   try { if (reader) await reader.cancel(); } catch (e) {}
   try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
   try { if (latest) latest.close(); } catch (e) {}
-  stream = null; reader = null; latest = null; frameAt = 0;
+  try { if (grabbed) grabbed.close(); } catch (e) {}
+  stream = null; reader = null; latest = null; grabbed = null; frameAt = 0;
 }
 
 async function start(sourceId, maxW, maxH, fps) {
@@ -98,20 +100,53 @@ function bytesToBase64(bytes) {
 // Waits for a frame that arrived AFTER this call (so a screenshot taken right
 // after an action shows the result), falling back to the newest frame when the
 // screen is static and the capturer sends nothing new.
-async function grab(quality, waitMs) {
+// The stream runs at native resolution; the screenshot is scaled to outW x outH.
+async function grab(quality, waitMs, outW, outH) {
   if (!running) throw new Error('stream not running');
   const t = performance.now();
   const fresh = await waitFrame(t, waitMs);
   let frame = latest;
   if (!frame) throw new Error('no frame');
-  const w = frame.displayWidth;
-  const h = frame.displayHeight;
+  // Read now: pump() closes `frame` when the next one arrives, and a closed frame reports 0x0.
+  const srcW = frame.displayWidth;
+  const srcH = frame.displayHeight;
+  const w = outW || srcW;
+  const h = outH || srcH;
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(frame, 0, 0);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(frame, 0, 0, w, h);
+  try { if (grabbed) grabbed.close(); } catch (e) {}
+  grabbed = frame.clone();
   const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  return { b64: bytesToBase64(bytes), w, h, fresh, ageMs: Math.round(performance.now() - frameAt) };
+  // srcW/srcH: the frame as captured, so the caller can still reject a stale or letterboxed stream.
+  return { b64: bytesToBase64(bytes), w, h, srcW, srcH, fresh, ageMs: Math.round(performance.now() - frameAt) };
+}
+
+// A region of the last grabbed frame at native resolution, as fractions 0..1,
+// scaled so its short side is at least minSide and its long side at most maxSide.
+async function crop(l, t, r, b, minSide, maxSide, quality) {
+  const frame = grabbed || latest;
+  if (!frame) throw new Error('no frame');
+  const fw = frame.displayWidth;
+  const fh = frame.displayHeight;
+  const sx = Math.max(0, Math.floor(l * fw));
+  const sy = Math.max(0, Math.floor(t * fh));
+  const sw = Math.max(1, Math.min(fw - sx, Math.round((r - l) * fw)));
+  const sh = Math.max(1, Math.min(fh - sy, Math.round((b - t) * fh)));
+  let s = Math.max(1, minSide / Math.min(sw, sh));
+  if (Math.max(sw, sh) * s > maxSide) s = maxSide / Math.max(sw, sh);
+  const w = Math.round(sw * s);
+  const h = Math.round(sh * s);
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(frame, sx, sy, sw, sh, 0, 0, w, h);
+  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  // The exact source rect actually used (rounded to pixels), so the caller maps boxes back precisely.
+  return { b64: bytesToBase64(bytes), w, h, l: sx / fw, t: sy / fh, r: (sx + sw) / fw, b: (sy + sh) / fh, srcW: sw, srcH: sh };
 }
 </script>
 </body>

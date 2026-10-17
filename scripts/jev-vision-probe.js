@@ -2,7 +2,7 @@
 // latency and box. Runs under electron (desktopCapturer). NEVER prints the key.
 //   npx electron scripts/jev-vision-probe.js --target "the Windows Start button" [--delay 2]
 //     [--max 1280] [--q 70] [--transport multipart|json] [--model jev-1.14.0]
-//     [--repeat 1..5] [--move] [--save <path>] [--uia]
+//     [--repeat 1..5] [--move] [--save <path>] [--uia] [--zoom]
 //   npx electron scripts/jev-vision-probe.js --bench-capture 20 [--max 1280] [--q 70]
 //     (no key needed; compares the stream capture with the desktopCapturer thumbnail)
 // Contract: docs/jev-vision/CONTRACT.md section 7, step 2.
@@ -28,6 +28,7 @@ function parseArgs(argv) {
     else if (a === '--move') out.move = true;
     else if (a === '--save') out.save = argv[++i] || null;
     else if (a === '--uia') out.uia = true;
+    else if (a === '--zoom') out.zoom = true;
     else if (a === '--bench-capture') out.benchCapture = Math.min(100, Math.max(1, Number(argv[++i]) || 20));
   }
   return out;
@@ -163,6 +164,36 @@ async function main() {
       `reason=${read.clickReason}`);
     console.log(`  physical point=${phys ? `(${phys.x}, ${phys.y})` : '-'}`);
     timings.push(r.ms);
+
+    // --zoom: the runner's small-target refinement, on the same frame.
+    if (args.zoom && read.box) {
+      const rect = vision.zoomRectFor(read.box, display, cfg);
+      if (!rect) console.log('  zoom: box not small, no refinement');
+      else {
+        const { captureCrop } = require(path.join(__dirname, '..', 'src', 'screen-capture.js'));
+        const crop = await captureCrop({ rect, quality: 85 });
+        if (!crop) console.log('  zoom: crop unavailable (stream not running)');
+        else {
+          const zb = vision.buildZoomRequest(step);
+          const zr = await jevCallImages({
+            key, model: args.model, state: zb.state, questions: zb.questions,
+            images: [{ ref: vision.SCREEN_REF, part: 'image', buffer: crop.jpeg, format: 'jpeg' }],
+            transport: args.transport, timeoutMs: 8000,
+          });
+          if (!zr.ok) console.log(`  zoom: jev failed ${zr.status} ${zr.error}`);
+          else {
+            const pb = vision.parseBoxAnswer(zr.answers, true, cfg, 'target', 0.6);
+            const vis = zr.answers.visible ? zr.answers.visible.noul : null;
+            const g = pb.box ? vision.mapZoomBox(crop.rect, pb.box) : null;
+            const zc = g ? vision.normalizedToPhysical(vision.boxCenterToNormalized(g), display) : null;
+            console.log(`  zoom: crop=${crop.width}x${crop.height} capture=${crop.ms}ms jev=${zr.ms}ms vis=${vis} ` +
+              `box=${pb.box ? JSON.stringify(pb.box) : '-'} reject=${pb.boxReject || '-'} refined point=${zc ? `(${zc.x}, ${zc.y})` : '-'}` +
+              (zc && phys ? ` moved=(${zc.x - phys.x}, ${zc.y - phys.y})px` : ''));
+            if (args.save) { try { fs.writeFileSync(args.save.replace(/(\.\w+)?$/, '-zoom.jpg'), crop.jpeg); } catch {} }
+          }
+        }
+      }
+    }
 
     if (args.save) {
       try { fs.writeFileSync(args.save, cap.jpeg); console.log(`  saved ${args.save}`); } catch (e) { console.error(`  save failed: ${e.message}`); }

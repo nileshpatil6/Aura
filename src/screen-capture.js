@@ -59,6 +59,18 @@ function checkFrame(width, height, phys) {
   return null;
 }
 
+// The native stream frame must match the display: a stale or letterboxed frame
+// would otherwise be stretched to the display aspect and clicks would land off target.
+function checkAspect(srcW, srcH, phys) {
+  if (!Number.isFinite(srcW) || !Number.isFinite(srcH) || srcW <= 0 || srcH <= 0) return 'capture frame has no size';
+  const dispAspect = phys.width / phys.height;
+  const srcAspect = srcW / srcH;
+  if (Math.abs(srcAspect - dispAspect) / dispAspect > 0.01) {
+    return `stream frame ${srcW}x${srcH} != display ${phys.width}x${phys.height}`;
+  }
+  return null;
+}
+
 // getSources()[0] is not guaranteed to be the primary display (T2). With several
 // sources and no display_id match we refuse rather than guess a monitor.
 function pickPrimarySource(sources, primary) {
@@ -210,6 +222,12 @@ async function ensureStream(primary, size) {
   return true;
 }
 
+// The stream runs at the display's native size so a zoom crop has real pixels;
+// every screenshot is scaled down to `size` in the page.
+function nativeSize(phys) {
+  return { width: phys.width, height: phys.height };
+}
+
 async function captureViaStream({ maxSide, quality }) {
   const start = Date.now();
   const primary = screen.getPrimaryDisplay();
@@ -217,15 +235,17 @@ async function captureViaStream({ maxSide, quality }) {
   const size = fitImageSize(phys.width, phys.height, maxSide);
   if (!size) return { ok: false, error: `no valid capture size for ${phys.width}x${phys.height}` };
 
-  if (!(await ensureStream(primary, size))) return null; // null = use the fallback
+  if (!(await ensureStream(primary, nativeSize(phys)))) return null; // null = use the fallback
   const win = stream.win;
   if (!win || win.isDestroyed()) return null;
 
   try {
     const r = await withTimeout(
-      win.webContents.executeJavaScript(`grab(${(quality / 100).toFixed(2)}, ${FRESH_WAIT_MS})`, true),
+      win.webContents.executeJavaScript(
+        `grab(${(quality / 100).toFixed(2)}, ${FRESH_WAIT_MS}, ${size.width}, ${size.height})`, true),
       GRAB_TIMEOUT_MS, 'capture grab');
-    const bad = checkFrame(r.w, r.h, phys);
+    // The output is always fitImageSize(phys), so the aspect check must run on the frame as captured.
+    const bad = checkFrame(r.w, r.h, phys) || checkAspect(r.srcW, r.srcH, phys);
     if (bad) {
       // A wrong-size frame means the stream is stale (mode change): back off, rebuild later, use thumbnails now.
       stream.failedAt = Date.now();
@@ -267,6 +287,36 @@ async function capturePrimaryJpeg({ maxSide, quality, fast = true }) {
   return captureViaThumbnail({ maxSide, quality });
 }
 
+/**
+ * A region of the most recent screenshot's frame at native resolution, for
+ * re-locating a small target. Stream path only: returns null when the stream
+ * is not running (the caller keeps its first box). Never throws.
+ * @param {{ rect:{left:number,top:number,right:number,bottom:number}, quality:number,
+ *           minSide?:number, maxSide?:number }} opts fractions of the display
+ */
+async function captureCrop({ rect, quality, minSide = 560, maxSide = 1024 }) {
+  const start = Date.now();
+  const win = stream.win;
+  if (!win || win.isDestroyed() || !stream.key || !rect) return null;
+  const vals = [rect.left, rect.top, rect.right, rect.bottom];
+  if (!vals.every(v => Number.isFinite(v) && v >= 0 && v <= 1) || !(rect.left < rect.right) || !(rect.top < rect.bottom)) return null;
+  try {
+    const r = await withTimeout(
+      win.webContents.executeJavaScript(
+        `crop(${vals.map(v => v.toFixed(6)).join(', ')}, ${minSide}, ${maxSide}, ${(quality / 100).toFixed(2)})`, true),
+      GRAB_TIMEOUT_MS, 'capture crop');
+    if (!validateImageDims(r.w, r.h)) return null;
+    armIdleStop();
+    return {
+      ok: true, jpeg: Buffer.from(r.b64, 'base64'), width: r.w, height: r.h, ms: Date.now() - start,
+      rect: { left: r.l, top: r.t, right: r.r, bottom: r.b },
+    };
+  } catch (e) {
+    log(`[jv] capture crop failed: ${(e && e.message) || e}`);
+    return null;
+  }
+}
+
 /** Start the stream ahead of the first capture (vision boot, text box open). Never throws. */
 async function warmCapture({ maxSide }) {
   try {
@@ -274,7 +324,7 @@ async function warmCapture({ maxSide }) {
     const phys = screen.dipToScreenRect(null, primary.bounds);
     const size = fitImageSize(phys.width, phys.height, maxSide);
     if (!size) return false;
-    const ok = await ensureStream(primary, size);
+    const ok = await ensureStream(primary, nativeSize(phys));
     if (ok) armIdleStop();
     return ok;
   } catch {
@@ -283,6 +333,6 @@ async function warmCapture({ maxSide }) {
 }
 
 module.exports = {
-  primaryDisplayInfo, capturePrimaryJpeg, captureViaThumbnail, warmCapture,
+  primaryDisplayInfo, capturePrimaryJpeg, captureViaThumbnail, captureCrop, warmCapture,
   stopCapture: stopStream, setCaptureLogger,
 };

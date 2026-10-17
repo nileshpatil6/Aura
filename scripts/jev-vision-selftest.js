@@ -1293,8 +1293,129 @@ check('runner: continue replan that drops an unverified last step cannot end ok-
     answerFn: (q) => (q.task_done ? { task_done: noul(q.prev_done ? 0.01 : 0.2), prev_done: noul(0.1) } : {}),
   });
   const r = await runVisionTask('type hello in the document then save', h.deps, h.cfg);
-  assert.equal(h.calls.replan, 1);
+  // An unsure final keeps asking the planner, bounded by maxReplans.
+  assert.ok(h.calls.replan >= 1 && h.calls.replan <= h.cfg.maxReplans);
   assert.equal(r.status, 'unverified');
+});
+
+check('risk check: Enter in a harmless context runs without a dialog; a sending one asks', async () => {
+  for (const [risky, wantConfirm] of [[0.1, 0], [0.9, 1]]) {
+    const h = harness({
+      cfg: { uia: false, finalVerify: false },
+      plan: planResult([{ op: 'hotkey', keys: 'enter', done_when: '' }]),
+      answerFn: (q) => (q.risky && !q.target ? { risky: noul(risky) } : {}),
+    });
+    const r = await runVisionTask('press enter to save', h.deps, h.cfg);
+    assert.equal(h.calls.confirm, wantConfirm);
+    assert.equal(h.calls.jev, 1);           // the one risk question
+    assert.equal(r.status, 'done');
+  }
+});
+
+check('risk check: shift+delete always asks, a failed risk call asks', async () => {
+  const hard = harness({ cfg: { uia: false, finalVerify: false }, plan: planResult([{ op: 'hotkey', keys: 'shift+delete', done_when: '' }]) });
+  await runVisionTask('delete it for good', hard.deps, hard.cfg);
+  assert.equal(hard.calls.confirm, 1);
+  assert.equal(hard.calls.jev, 0);
+  const broken = harness({
+    cfg: { uia: false, finalVerify: false },
+    plan: planResult([{ op: 'hotkey', keys: 'enter', done_when: '' }]),
+    overrides: { jev: async () => ({ ok: false, status: 500 }) },
+  });
+  await runVisionTask('press enter', broken.deps, broken.cfg);
+  assert.equal(broken.calls.confirm, 1);
+});
+
+check('zoom: a small box is refined on a crop and the refined center is clicked', async () => {
+  let cropRect = null;
+  const h = harness({
+    cfg: { uia: false, finalVerify: false },
+    plan: planResult([{ op: 'click', target: 'Rectangle shape icon', done_when: '' }]),
+    // first call: a 0.02-wide box at 0.33..0.35; zoom call: a slightly shifted box near the crop center
+    answerFn: (q, n) => (n === 1
+      ? groundAnswer({ target: boxAns(0.33, 0.09, 0.35, 0.12, 0.9) })
+      : { visible: noul(0.95), target: boxAns(0.5, 0.45, 0.6, 0.55, 0.9) }),
+    overrides: { captureCrop: async (rect) => { cropRect = rect; return { ok: true, jpeg: Buffer.from('crop'), width: 560, height: 560 }; } },
+  });
+  const r = await runVisionTask('click the rectangle tool in paint', h.deps, h.cfg);
+  assert.equal(r.status, 'done');
+  assert.ok(cropRect && cropRect.left < 0.33 && cropRect.right > 0.35);
+  const p = h.calls.inputParams[0];
+  const wantNx = (cropRect.left + 0.55 * (cropRect.right - cropRect.left)) * 1000;
+  assert.ok(Math.abs(p.nx - wantNx) < 0.5, `nx ${p.nx} vs ${wantNx}`);
+  assert.equal(h.calls.jev, 2);
+});
+
+check('zoom: big boxes are not refined; an unsure zoom keeps the first box', async () => {
+  let crops = 0;
+  const big = harness({
+    cfg: { uia: false, finalVerify: false },
+    plan: planResult([{ op: 'click', target: 'Canvas', done_when: '' }]),
+    answerFn: () => groundAnswer(),
+    overrides: { captureCrop: async () => { crops++; return { ok: false }; } },
+  });
+  await runVisionTask('click the canvas', big.deps, big.cfg);
+  assert.equal(crops, 0);
+  const unsure = harness({
+    cfg: { uia: false, finalVerify: false },
+    plan: planResult([{ op: 'click', target: 'tiny icon', done_when: '' }]),
+    answerFn: (q, n) => (n === 1 ? groundAnswer({ target: boxAns(0.50, 0.50, 0.52, 0.52, 0.9) }) : { visible: noul(0.1), target: boxAns(0, 0, 0.1, 0.1, 0.9) }),
+    overrides: { captureCrop: async () => ({ ok: true, jpeg: Buffer.from('c'), width: 560, height: 560 }) },
+  });
+  await runVisionTask('click the tiny icon', unsure.deps, unsure.cfg);
+  assert.ok(Math.abs(unsure.calls.inputParams[0].nx - 510) < 0.5);
+});
+
+check('zoom: a refined center far from the first box keeps the first box; alt+f4 always asks', async () => {
+  const h = harness({
+    cfg: { uia: false, finalVerify: false },
+    plan: planResult([{ op: 'click', target: 'Bold button', done_when: '' }]),
+    // first box at 0.50..0.52; zoom answers the crop's far corner (a different control)
+    answerFn: (q, n) => (n === 1 ? groundAnswer({ target: boxAns(0.50, 0.50, 0.52, 0.52, 0.9) }) : { visible: noul(0.95), target: boxAns(0.0, 0.0, 0.05, 0.05, 0.9) }),
+    overrides: { captureCrop: async (rect) => ({ ok: true, jpeg: Buffer.from('c'), width: 560, height: 560, rect }) },
+  });
+  await runVisionTask('click bold', h.deps, h.cfg);
+  assert.ok(Math.abs(h.calls.inputParams[0].nx - 510) < 0.5);
+  const f4 = harness({ cfg: { uia: false, finalVerify: false }, plan: planResult([{ op: 'hotkey', keys: 'alt+f4', done_when: '' }]) });
+  await runVisionTask('close the window', f4.deps, f4.cfg);
+  assert.equal(f4.calls.confirm, 1);
+  assert.equal(f4.calls.jev, 0);
+});
+
+check('final: a still splash screen does not end an open_app wait before half the window', async () => {
+  let frame = 0;
+  const sigs = { A: new Uint8Array(1296).fill(10), B: new Uint8Array(1296).fill(200) };
+  const h = harness({
+    cfg: { uia: false, appWaitMs: 8000, stableMs: 1200, maxReplans: 0 },
+    plan: planResult([{ op: 'open_app', app: 'word', done_when: '' }]),
+    answerFn: () => ({ task_done: noul(0.5) }),
+    overrides: { capture: async () => { frame++; return { ok: true, jpeg: Buffer.from('j'), width: 1280, height: 720, ms: 1, sig: frame <= 1 ? sigs.A : sigs.B }; } },
+  });
+  const t0 = h.deps.now();
+  await runVisionTask('open word', h.deps, h.cfg);
+  assert.ok(h.deps.now() - t0 >= 4000, `ended after ${h.deps.now() - t0}ms`);
+});
+
+check('final: a loaded page that holds still ends the launch wait early', async () => {
+  let frame = 0;
+  const h = harness({
+    cfg: { uia: false, appWaitMs: 8000, stableMs: 1200, maxReplans: 0 },
+    plan: planResult([{ op: 'open_url', url: 'https://example.com', done_when: '' }]),
+    answerFn: () => ({ task_done: noul(0.5) }),
+    overrides: {
+      openUrl: async () => ({ success: true }),
+      // before the action: A; then the page loads (B) and stays B
+      capture: async () => { frame++; return { ok: true, jpeg: Buffer.from('j'), width: 1280, height: 720, ms: 1, sig: frame <= 1 ? 'A' : 'B' }; },
+    },
+  });
+  h.deps.capture = h.deps.capture; // keep
+  const sigs = { A: new Uint8Array(1296).fill(10), B: new Uint8Array(1296).fill(200) };
+  const cap = h.deps.capture;
+  h.deps.capture = async () => { const r = await cap(); return { ...r, sig: sigs[r.sig] }; };
+  const t0 = h.deps.now();
+  const r = await runVisionTask('open example.com', h.deps, h.cfg);
+  assert.equal(r.status, 'done_unconfirmed');
+  assert.ok(h.deps.now() - t0 < 8000, `took ${h.deps.now() - t0}ms of the 8000ms window`);
 });
 
 check('runner: continue replan "complete" with an unverified last step is unverified; null task_done counts as 0', async () => {

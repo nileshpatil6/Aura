@@ -47,6 +47,11 @@ const DEFAULT_VISION_CFG = Object.freeze({
   plannerMaxTokens: 2048,           // AURA_PLANNER_MAX_TOKENS, 256..8192
   fastCapture: true,                // AURA_JV_FAST_CAPTURE ('0' = always use desktopCapturer thumbnails)
   warmup: true,                     // AURA_JV_WARMUP ('0' = no connection/capture/app-index prewarm)
+  zoom: true,                       // AURA_JV_ZOOM ('0' = click small targets straight from the first box)
+  zoomMaxW: 0.06,                   // AURA_JV_ZOOM_MAX_W, boxes narrower than this (fraction of width) are refined
+  zoomMaxH: 0.08,                   // AURA_JV_ZOOM_MAX_H, and shorter than this (fraction of height)
+  stableMs: 1200,                   // AURA_JV_STABLE_MS, a launch that changed the screen and then held still this long has loaded
+  riskCheck: true,                  // AURA_JV_RISK_CHECK ('0' = always confirm enter-like keys and type+submit)
   thresholds: Object.freeze({
     prevDone: 0.6, taskDone: 0.7, visible: 0.5, boxConf: 0.3, boxMaxArea: 0.25,
     element: 0.7, risky: 0.5, blocked: 0.8,
@@ -131,6 +136,11 @@ function readVisionConfig(env = {}) {
     plannerMaxTokens: envNumber(env, 'AURA_PLANNER_MAX_TOKENS', d.plannerMaxTokens, { clamp: true, min: 256, max: 8192 }),
     fastCapture: envBool(env, 'AURA_JV_FAST_CAPTURE', d.fastCapture),
     warmup: envBool(env, 'AURA_JV_WARMUP', d.warmup),
+    zoom: envBool(env, 'AURA_JV_ZOOM', d.zoom),
+    zoomMaxW: envNumber(env, 'AURA_JV_ZOOM_MAX_W', d.zoomMaxW, { min: 0, max: 1 }),
+    zoomMaxH: envNumber(env, 'AURA_JV_ZOOM_MAX_H', d.zoomMaxH, { min: 0, max: 1 }),
+    stableMs: envNumber(env, 'AURA_JV_STABLE_MS', d.stableMs, { min: 0, integer: true }),
+    riskCheck: envBool(env, 'AURA_JV_RISK_CHECK', d.riskCheck),
     thresholds: d.thresholds,
   };
 }
@@ -416,8 +426,10 @@ function isConsequential(step) {
 }
 
 /**
- * A hotkey that confirms or destroys on its own: ends in enter/delete/del, or is
- * ctrl+enter, alt+f4, shift+delete. Independent of the planner's risky flag.
+ * A hotkey that MAY confirm or destroy: ends in enter/delete/del, or is
+ * ctrl+enter, alt+f4, shift+delete. Whether it actually does depends on the
+ * screen (Enter in a Save dialog is harmless, Enter in a chat sends), so the
+ * runner asks Jev before confirming; see needsRiskCheck.
  */
 function isRiskyHotkey(keys) {
   const parts = String(keys || '').toLowerCase().split('+').filter(Boolean);
@@ -427,6 +439,90 @@ function isRiskyHotkey(keys) {
   if (['enter', 'return', 'kp_enter', 'delete', 'del'].includes(last)) return true;
   const norm = parts.join('+');
   return norm === 'ctrl+enter' || norm === 'alt+f4' || norm === 'shift+delete';
+}
+
+/** Can destroy work whatever the screen shows (permanent delete, close discarding edits): always confirmed. */
+function isHardRiskyHotkey(keys) {
+  const norm = String(keys || '').toLowerCase().split('+').filter(Boolean).join('+');
+  return norm === 'shift+delete' || norm === 'shift+del' || norm === 'alt+f4';
+}
+
+/**
+ * Steps whose effect depends on what is focused: an enter-like key, or typing
+ * with submit. The runner asks Jev about the current screen before deciding
+ * whether to confirm, instead of confirming every Enter.
+ */
+function needsRiskCheck(step) {
+  if (!step) return false;
+  if (step.op === 'hotkey') return isRiskyHotkey(step.keys) && !isHardRiskyHotkey(step.keys);
+  return step.op === 'type' && step.submit === true;
+}
+
+/** One noul on the current screen: would this key press / submit do something hard to undo? */
+function buildRiskCheckRequest(task, step) {
+  const what = step.op === 'type'
+    ? `typing "${sanitizeText(step.text, 80)}" and pressing Enter`
+    : `pressing ${sanitizeText(step.keys, 40)}`;
+  return {
+    state: { screenshot: SCREEN_REF, task: sanitizeText(task, 500) },
+    questions: {
+      risky: {
+        type: 'noul',
+        instructions: `The next action is ${what} in the window that has focus in \`screenshot\`. ` +
+          'Would that send a message or email, post or publish something, place an order or pay, ' +
+          'delete files or data, overwrite or replace an existing file, or discard unsaved changes? ' +
+          'Saving a NEW file, confirming an open dialog, running a search, adding a new line or moving between fields is NOT risky.',
+      },
+    },
+    flags: { verify: false, ground: false, final: false, riskyAsked: true },
+  };
+}
+
+/**
+ * Small boxes (toolbar icons) are where a 1280px screenshot is least precise.
+ * Returns the crop to re-ask Jev on, as fractions of the display, or null when
+ * the box is big enough. The crop is about 8x the box, square in pixels, kept on screen.
+ */
+function zoomRectFor(box, display, cfg) {
+  if (!box) return null;
+  const bw = box.right - box.left;
+  const bh = box.bottom - box.top;
+  if (!(bw > 0 && bh > 0) || bw >= cfg.zoomMaxW || bh >= cfg.zoomMaxH) return null;
+  const W = display.physW;
+  const H = display.physH;
+  const side = Math.min(0.5 * H, Math.max(0.18 * H, 8 * Math.max(bw * W, bh * H)));
+  const hw = side / 2 / W;
+  const hh = side / 2 / H;
+  const cx = (box.left + box.right) / 2;
+  const cy = (box.top + box.bottom) / 2;
+  const left = Math.min(Math.max(0, cx - hw), 1 - 2 * hw);
+  const top = Math.min(Math.max(0, cy - hh), 1 - 2 * hh);
+  return { left, top, right: left + 2 * hw, bottom: top + 2 * hh };
+}
+
+/** Visible + box on the zoomed crop, worded like the full-screen ground question. */
+function buildZoomRequest(step) {
+  const target = sanitizeText(step.target, 200);
+  return {
+    state: { screenshot: SCREEN_REF },
+    questions: {
+      visible: { type: 'noul', instructions: `Is ${target} visible in \`screenshot\`?` },
+      target: { type: 'box', instructions: `Locate ${target} in \`screenshot\`. Box only that control, tightly.` },
+    },
+  };
+}
+
+/** A box answered on the crop, mapped back to whole-display fractions. */
+function mapZoomBox(rect, box) {
+  const w = rect.right - rect.left;
+  const h = rect.bottom - rect.top;
+  return {
+    left: rect.left + box.left * w,
+    right: rect.left + box.right * w,
+    top: rect.top + box.top * h,
+    bottom: rect.top + box.bottom * h,
+    confidence: box.confidence,
+  };
 }
 
 function hostOf(url) {
@@ -582,6 +678,12 @@ function buildVisionRequest(ctx) {
       questions.risky = {
         type: 'noul',
         instructions: `Would clicking ${target} send, delete, buy, pay, publish or do something hard to undo?`,
+      };
+    } else if (step.op === 'type' && step.submit === true) {
+      questions.risky = {
+        type: 'noul',
+        instructions: `Would typing into ${target} and pressing Enter send a message or email, post, order, pay or delete something? ` +
+          'Running a search or saving a file is NOT risky.',
       };
     }
   }
@@ -878,6 +980,13 @@ module.exports = {
   parseTrivialCommand,
   isConsequential,
   isRiskyHotkey,
+  isHardRiskyHotkey,
+  needsRiskCheck,
+  buildRiskCheckRequest,
+  zoomRectFor,
+  buildZoomRequest,
+  mapZoomBox,
+  parseBoxAnswer,
   parseHttpUrl,
   describeStep,
   buildVisionRequest,

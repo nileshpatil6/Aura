@@ -10,7 +10,7 @@ const { buildJevRequest, interpretJevAnswers, snapshotSignature } = require('./j
 const { resolveJevKey, resolveGeminiKey } = require('./env-keys');
 const { runVisionTask } = require('./jev-vision-runner');
 const { planTask, replanTask } = require('./jev-planner');
-const { primaryDisplayInfo, capturePrimaryJpeg, warmCapture, setCaptureLogger } = require('./screen-capture');
+const { primaryDisplayInfo, capturePrimaryJpeg, captureCrop, warmCapture, setCaptureLogger } = require('./screen-capture');
 const { readVisionConfig, lumaSignature, SIG_W, SIG_H } = require('./jev-vision');
 
 let mainWindow = null;
@@ -982,6 +982,8 @@ function visionDeps(bundle, ctl, controller) {
       if (r && r.ok && cfg.frameSkip) r.sig = frameSignature(r.jpeg); // lets the runner skip Jev on an unchanged screen
       return r;
     },
+    // Full-resolution crop of the last screenshot's frame for small targets; null keeps the first box.
+    captureCrop: cfg.zoom && cfg.fastCapture ? (rect) => captureCrop({ rect, quality: Math.max(cfg.jpegQuality, 80) }) : null,
     appKnown: (name) => automation.isKnownApp(name),
     uiaSnapshot: async () => {
       const snap = await uia.uiaSnapshot({
